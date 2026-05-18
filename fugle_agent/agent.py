@@ -27,6 +27,9 @@ from .tools import ALL_TOOLS
 MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 MAX_STEPS = int(os.getenv("FUGLE_AGENT_MAX_STEPS", "12"))
 MAX_TOKENS = int(os.getenv("ANTHROPIC_MAX_TOKENS", "4096"))
+# Sliding window: keep at most this many recent messages in the LLM context.
+# Older ones get dropped to bound token usage / rate-limit risk.
+MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "24"))
 
 SYSTEM_PROMPT = """你是「史塔克」— 使用者的個人台股管理助理(命名出自 Tony Stark)。
 你的角色是個盡責的私人量化分析師,read-only,絕對不下單。
@@ -162,6 +165,37 @@ def _blocks_to_dicts(blocks) -> list[dict]:
     return out
 
 
+def _trim_history_inplace(history: list, *, max_messages: int) -> int:
+    """Drop oldest messages to keep history within ``max_messages``.
+
+    Important constraint: a turn that started a tool call (``tool_use``)
+    *must* be followed by its ``tool_result`` in the next user message — if
+    we cut between them, the Anthropic API rejects the request.  So we only
+    cut at the boundary of a *fresh* user message (one whose content is a
+    plain string, not a list of ``tool_result`` blocks).
+
+    Returns the number of messages dropped (for logging / UI).
+    """
+    if len(history) <= max_messages:
+        return 0
+
+    cutoff = len(history) - max_messages
+    # Walk forward from the desired cutoff looking for a clean boundary.
+    cut_at = None
+    for i in range(cutoff, len(history)):
+        msg = history[i]
+        if msg.get("role") == "user" and isinstance(msg.get("content"), str):
+            cut_at = i
+            break
+
+    if cut_at is None or cut_at <= 0:
+        return 0  # no safe cut point found; leave as-is
+
+    dropped = cut_at
+    del history[:cut_at]
+    return dropped
+
+
 # ---------- main loop ----------
 
 async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[dict]:
@@ -178,6 +212,12 @@ async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[di
     tools = _anthropic_tool_specs()
     mode_str = "mock" if SETTINGS.mock else "live"
     system_text = SYSTEM_PROMPT.format(mode=mode_str, user_context=_user_context())
+
+    # Bound history BEFORE appending — keeps the conversation context
+    # within token / rate-limit budget even on long sessions.
+    dropped = _trim_history_inplace(history, max_messages=MAX_HISTORY_MESSAGES - 2)
+    if dropped:
+        yield {"type": "history_trimmed", "dropped": dropped}
 
     history.append({"role": "user", "content": user_input})
 
