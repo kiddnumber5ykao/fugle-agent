@@ -35,6 +35,7 @@ except Exception:  # pragma: no cover — fallback for unit tests / mock-only us
 
 from . import backtest as bt
 from . import sheets
+from . import us_market
 from .client import FugleClient
 from .indicators import ema, rsi, sma
 
@@ -327,9 +328,84 @@ async def get_trade_log(args: dict) -> dict:
     })
 
 
+# ---------- 美股 / 全球(yfinance) ----------
+
+@tool(
+    "get_us_quote",
+    "取得美股或全球個股 / ETF / 加密貨幣的即時報價(資料來自 Yahoo Finance,延遲 15-20 分鐘)。"
+    "美股代號用英文(AAPL, MSFT, TSLA, NVDA, GOOG);ETF 同樣英文(SPY, QQQ, VOO);"
+    "加密貨幣加 -USD 後綴(BTC-USD, ETH-USD)。台股代號用 get_quote,不要用這個。",
+    {
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string", "description": "Yahoo 代號,如 AAPL、SPY、BTC-USD"},
+        },
+        "required": ["symbol"],
+    },
+)
+async def get_us_quote(args: dict) -> dict:
+    data = us_market.quote(args["symbol"])
+    return _envelope({"source": "yahoo", **data})
+
+
+@tool(
+    "get_us_candles",
+    "取得美股或全球個股的日 K 線歷史(資料來自 Yahoo Finance)。預設過去 180 天。",
+    {
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string"},
+            "from_date": {"type": "string", "description": "ISO 日期 YYYY-MM-DD,選填"},
+            "to_date": {"type": "string", "description": "ISO 日期 YYYY-MM-DD,選填"},
+        },
+        "required": ["symbol"],
+    },
+)
+async def get_us_candles(args: dict) -> dict:
+    data = us_market.candles(
+        args["symbol"],
+        from_date=args.get("from_date"),
+        to_date=args.get("to_date"),
+    )
+    if "error" in data:
+        return _envelope({"source": "yahoo", **data})
+    bars = data.get("data", [])
+    return _envelope({
+        "source": "yahoo",
+        "symbol": data.get("symbol"),
+        "n_bars": len(bars),
+        "first": bars[0] if bars else None,
+        "last":  bars[-1] if bars else None,
+        "sample_tail": bars[-10:],
+    })
+
+
+@tool(
+    "get_stock_news",
+    "取得單一個股的最新新聞(資料來自 Yahoo Finance,以英文新聞為主,有少數中文)。"
+    "美股代號直接打 AAPL;台股代號要加 .TW 後綴,例如 2330 要打 2330.TW。"
+    "想搜尋總體 / 政策 / 跨股票的新聞,改用 web_search 工具。",
+    {
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string", "description": "美股代號或台股 .TW 代號"},
+            "limit":  {"type": "integer", "default": 10, "minimum": 1, "maximum": 30},
+        },
+        "required": ["symbol"],
+    },
+)
+async def get_stock_news(args: dict) -> dict:
+    items = us_market.news(args["symbol"], limit=int(args.get("limit", 10)))
+    return _envelope({"source": "yahoo", "symbol": args["symbol"],
+                      "n_items": len(items), "items": items})
+
+
 ALL_TOOLS = [
     get_my_portfolio,
     get_trade_log,
+    get_us_quote,
+    get_us_candles,
+    get_stock_news,
     get_quote,
     get_candles,
     get_intraday_ticks,

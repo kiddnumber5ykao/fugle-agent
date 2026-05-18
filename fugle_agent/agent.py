@@ -37,15 +37,30 @@ SYSTEM_PROMPT = """你是「史塔克」— 使用者的個人台股管理助理
 - get_my_portfolio: 目前持股(代號、股數、平均成本、備註)
 - get_trade_log: 完整買賣紀錄(可依 symbol / action 過濾)
 
-【市場資料(Fugle Market Data API)】
-- get_quote: 即時報價
-- get_candles: 日 K 線歷史
-- get_intraday_ticks: 盤中逐筆
-- get_market_movers: 漲跌幅排行
+【台股市場資料(Fugle Market Data API)】
+- get_quote: 台股即時報價 — 代號是 4 位數字(2330、0050、2454)
+- get_candles: 台股日 K 線歷史
+- get_intraday_ticks: 台股盤中逐筆
+- get_market_movers: 台股漲跌幅排行
+
+【美股 / 全球市場資料(Yahoo Finance,延遲 15-20 分鐘)】
+- get_us_quote: 美股 / ETF / 加密貨幣報價 — 代號用英文(AAPL、SPY、BTC-USD)
+- get_us_candles: 美股日 K 線歷史
+
+【新聞】
+- get_stock_news: **個股**新聞 — 美股直接打代號(AAPL),台股加 .TW 後綴(2330.TW)
+- web_search: **總體 / 政策 / 跨股票** 新聞與資訊搜尋(中英文都可),
+  例如「央行升息」「美國通膨數據」「半導體景氣」「ASML 財報」
 
 【分析】
 - compute_indicators: SMA / EMA / RSI
 - backtest_sma_crossover, backtest_rsi_mean_reversion: 策略回測
+
+⚠️ 工具選擇規則:
+- 看到 4 位數字代號(2330)→ 台股,用 get_quote / get_candles
+- 看到英文代號(AAPL)→ 美股,用 get_us_quote / get_us_candles
+- 個股新聞 → get_stock_news(台股要加 .TW)
+- 總體 / 政策 / 「市場現在怎麼了」→ web_search
 
 == 風格指引 ==
 1. 使用者問「我的持股」「我的損益」「我買的」等個人化問題時,先叫 get_my_portfolio
@@ -89,9 +104,12 @@ def _user_context() -> str:
 _HANDLERS = {t.name: t.handler for t in ALL_TOOLS}
 
 
+WEB_SEARCH_MAX_USES = int(os.getenv("WEB_SEARCH_MAX_USES", "5"))
+
+
 def _anthropic_tool_specs() -> list[dict]:
-    """Convert each @tool to Anthropic's tool-use schema."""
-    return [
+    """Custom (client-side) tools + Anthropic-managed server tools (web_search)."""
+    specs: list[dict] = [
         {
             "name": t.name,
             "description": t.description,
@@ -99,6 +117,14 @@ def _anthropic_tool_specs() -> list[dict]:
         }
         for t in ALL_TOOLS
     ]
+    # Anthropic-managed server tool: web search.  Claude can browse the web on
+    # its own and get results back without us writing any handler.
+    specs.append({
+        "type": "web_search_20250305",
+        "name": "web_search",
+        "max_uses": WEB_SEARCH_MAX_USES,
+    })
+    return specs
 
 
 async def _run_tool(name: str, args: dict) -> str:
@@ -166,10 +192,12 @@ async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[di
 
         tool_uses = []
         for block in response.content:
-            if block.type == "text":
+            btype = getattr(block, "type", "")
+            if btype == "text":
                 if block.text:
                     yield {"type": "text", "text": block.text}
-            elif block.type == "tool_use":
+            elif btype == "tool_use":
+                # client-side custom tool — we need to execute it
                 tool_uses.append(block)
                 yield {
                     "type": "tool_call",
@@ -177,6 +205,19 @@ async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[di
                     "input": block.input or {},
                     "id": block.id,
                 }
+            elif btype == "server_tool_use":
+                # Anthropic-managed tool (e.g. web_search) — already running
+                # server-side, we just surface to the UI for transparency.
+                yield {
+                    "type": "tool_call",
+                    "name": f"🌐 {getattr(block, 'name', 'web_search')}",
+                    "input": getattr(block, "input", {}) or {},
+                    "id":    getattr(block, "id", ""),
+                }
+            elif btype == "web_search_tool_result":
+                # Search results are auto-injected into Claude's next thinking,
+                # we don't need to handle them ourselves.
+                pass
 
         # Persist this assistant turn (text + any tool_use blocks) to history
         history.append({"role": "assistant", "content": _blocks_to_dicts(response.content)})
