@@ -31,6 +31,8 @@ def _load_secrets_into_env() -> None:
         "PORTFOLIO_SHEET_URL",
         "PORTFOLIO_POSITIONS_TAB",
         "PORTFOLIO_TRADES_TAB",
+        # 個人化偏好(費率、投資風格)— 直接注入 system prompt
+        "USER_CONTEXT",
     )
     try:
         for k in keys:
