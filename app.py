@@ -27,6 +27,10 @@ def _load_secrets_into_env() -> None:
         "FUGLE_RATE_LIMIT_SLEEP",
         "FUGLE_AGENT_MAX_STEPS",
         "APP_PASSWORD",
+        # Portfolio (Google Sheets)
+        "PORTFOLIO_SHEET_URL",
+        "PORTFOLIO_POSITIONS_TAB",
+        "PORTFOLIO_TRADES_TAB",
     )
     try:
         for k in keys:
