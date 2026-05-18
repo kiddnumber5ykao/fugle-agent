@@ -116,7 +116,18 @@ with st.sidebar:
     else:
         st.success("📡 **Live 模式** — Fugle 真實資料")
 
-    if st.button("🗑️ 清除對話", use_container_width=True):
+    # --- 對話控制 ---
+    n_msgs = len(st.session_state.get("history", []))
+    st.caption(f"📜 對話訊息數:**{n_msgs}** 則")
+    if n_msgs >= 20:
+        st.warning("對話有點長,舊訊息會自動被丟掉以省 token 額度。")
+
+    if st.button(
+        "🗑️ 清除對話",
+        use_container_width=True,
+        help="只清掉這個瀏覽器分頁裡的對話歷史。Streamlit Secrets 裡的 "
+             "USER_CONTEXT、API key、Google Sheet 連結都會保留。",
+    ):
         st.session_state.display = []
         st.session_state.history = []
         st.rerun()
@@ -179,6 +190,9 @@ def _consume_turn(prompt: str, text_box, tool_log):
                             json.dumps(event["input"], ensure_ascii=False, indent=2),
                             language="json",
                         )
+            elif kind == "history_trimmed":
+                with tool_log:
+                    st.caption(f"♻️ 已自動丟掉 {event['dropped']} 則舊訊息以省 token")
             elif kind == "max_steps_reached":
                 text_buffer[0] += f"\n\n_(達到最大 {event['steps']} 步,中止)_"
                 text_box.markdown(text_buffer[0])
