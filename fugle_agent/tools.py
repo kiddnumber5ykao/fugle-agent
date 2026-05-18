@@ -34,6 +34,7 @@ except Exception:  # pragma: no cover — fallback for unit tests / mock-only us
         return deco
 
 from . import backtest as bt
+from . import sheets
 from .client import FugleClient
 from .indicators import ema, rsi, sma
 
@@ -275,7 +276,60 @@ async def backtest_rsi_mean_reversion(args: dict) -> dict:
     return _envelope({"mode": _client.mode, **result.to_dict()})
 
 
+# ---------- portfolio (使用者的 Google Sheet) ----------
+
+@tool(
+    "get_my_portfolio",
+    "讀取使用者目前的台股持股 — 含代號、股數、平均成本。資料來自使用者個人 "
+    "Google Sheet 的「持股」分頁。要算現值 / 損益,需要再對每檔呼叫 get_quote。",
+    {"type": "object", "properties": {}, "required": []},
+)
+async def get_my_portfolio(args: dict) -> dict:
+    holdings = sheets.load_positions()
+    if holdings and holdings[0].get("_error"):
+        return _envelope({"mode": _client.mode, "error": holdings[0]["_error"]})
+    return _envelope({
+        "mode": _client.mode,
+        "n_holdings": len(holdings),
+        "holdings": holdings,
+        "note": "成本價來自使用者 Google Sheet。要算現值 / 損益,請對每檔再呼叫 get_quote 取現價。",
+    })
+
+
+@tool(
+    "get_trade_log",
+    "讀取使用者完整交易紀錄 — 每筆 BUY / SELL 的日期、股數、成交價、手續費。"
+    "資料來自使用者個人 Google Sheet 的「交易紀錄」分頁。用來算已實現損益、"
+    "交易頻率、最長持有時間、勝率等。",
+    {
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string", "description": "選填 — 只回傳單一代號的紀錄"},
+            "action": {"type": "string", "enum": ["BUY", "SELL"], "description": "選填 — 只回傳 BUY 或 SELL"},
+        },
+        "required": [],
+    },
+)
+async def get_trade_log(args: dict) -> dict:
+    trades = sheets.load_trades()
+    if trades and trades[0].get("_error"):
+        return _envelope({"mode": _client.mode, "error": trades[0]["_error"]})
+    sym = (args or {}).get("symbol")
+    action = (args or {}).get("action")
+    if sym:
+        trades = [t for t in trades if t.get("symbol") == sym]
+    if action:
+        trades = [t for t in trades if t.get("action") == action.upper()]
+    return _envelope({
+        "mode": _client.mode,
+        "n_trades": len(trades),
+        "trades": trades,
+    })
+
+
 ALL_TOOLS = [
+    get_my_portfolio,
+    get_trade_log,
     get_quote,
     get_candles,
     get_intraday_ticks,
