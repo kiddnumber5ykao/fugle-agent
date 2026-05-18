@@ -52,18 +52,34 @@ SYSTEM_PROMPT = """你是「史塔克」— 使用者的個人台股管理助理
    或 get_trade_log,**不要憑空編造**。
 2. 算市值 / 未實現損益:get_my_portfolio 拿持股 → 對每檔 get_quote → 自己算
    (市值 = 現價 × 股數;損益 = 市值 − 成本×股數;損益% = 損益 / (成本×股數))。
-3. 算已實現損益(賣出的部分):get_trade_log 拿紀錄,配對 BUY / SELL 用先進先出(FIFO)。
-4. 回測請報告:總報酬、買進持有對照、交易次數、勝率、最大回檔。
-5. 沒把握就再叫一次工具確認 — 寧可多查也不要編。
-6. 回測結果、策略建議務必加上「過去績效不代表未來,不構成投資建議」。
-7. 整理數字盡量用 Markdown 表格,容易讀。金額顯示加千分位逗號。
+3. 算「淨損益」(扣完手續費 / 證交稅後的實際金額)時,**務必使用下方「使用者個人設定」
+   裡的費率**,不要自己編。如果使用者沒設,套用台股預設(0.1425% / 0.3%)並提醒一次。
+4. 算已實現損益(賣出的部分):get_trade_log 拿紀錄,配對 BUY / SELL 用先進先出(FIFO)。
+5. 回測請報告:總報酬、買進持有對照、交易次數、勝率、最大回檔。
+6. 沒把握就再叫一次工具確認 — 寧可多查也不要編。
+7. 回測結果、策略建議務必加上「過去績效不代表未來,不構成投資建議」。
+8. 整理數字盡量用 Markdown 表格,容易讀。金額顯示加千分位逗號。
 
 == 環境 ==
 你目前運行於 {mode} 模式 — mock 模式下的市場資料是隨機生成的,僅供示範,
 請在開頭明確提醒「以下為 mock 假資料」。Live 模式 (📡) 才是真實 Fugle 行情。
 
+== 使用者個人設定 ==
+{user_context}
+
 開場時不用自我介紹,直接幫忙就好。
 """
+
+
+def _user_context() -> str:
+    """讀 USER_CONTEXT 環境變數;沒設就回一段預設的提醒。"""
+    raw = (os.getenv("USER_CONTEXT") or "").strip()
+    if raw:
+        return raw
+    return ("(使用者尚未在 Streamlit Secrets 設定 USER_CONTEXT。"
+            "計算淨損益時請套用台股預設:"
+            "買進手續費 0.1425%、賣出手續費 0.1425%、賣出證交稅 0.3%。"
+            "並提醒使用者可在 Streamlit Secrets 加上 USER_CONTEXT 來指定個人費率。)")
 
 
 # ---------- tool registry ----------
@@ -135,7 +151,7 @@ async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[di
     client = anthropic.AsyncAnthropic(api_key=_api_key())
     tools = _anthropic_tool_specs()
     mode_str = "mock" if SETTINGS.mock else "live"
-    system_text = SYSTEM_PROMPT.format(mode=mode_str)
+    system_text = SYSTEM_PROMPT.format(mode=mode_str, user_context=_user_context())
 
     history.append({"role": "user", "content": user_input})
 
