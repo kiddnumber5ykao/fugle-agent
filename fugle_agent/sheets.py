@@ -9,8 +9,8 @@ visualization (gviz) endpoint, which accepts a tab name directly:
 Env vars
 --------
 PORTFOLIO_SHEET_URL         Share URL of the spreadsheet (any tab will work)
-PORTFOLIO_POSITIONS_TAB     Tab name for current holdings (default: "持股")
-PORTFOLIO_TRADES_TAB        Tab name for transaction log  (default: "交易紀錄")
+PORTFOLIO_POSITIONS_TAB     Tab name for current holdings (default: "股票部位")
+PORTFOLIO_TRADES_TAB        Tab name for transaction log  (default: "股票交易")
 """
 
 from __future__ import annotations
@@ -27,10 +27,12 @@ SHEET_URL_ENV = "PORTFOLIO_SHEET_URL"
 POSITIONS_TAB_ENV = "PORTFOLIO_POSITIONS_TAB"
 TRADES_TAB_ENV = "PORTFOLIO_TRADES_TAB"
 FUNDS_TAB_ENV = "PORTFOLIO_FUNDS_TAB"
+FUND_TRADES_TAB_ENV = "PORTFOLIO_FUND_TRADES_TAB"
 
-DEFAULT_POSITIONS_TAB = "持股"
-DEFAULT_TRADES_TAB = "交易紀錄"
-DEFAULT_FUNDS_TAB = "基金"
+DEFAULT_POSITIONS_TAB = "股票部位"
+DEFAULT_TRADES_TAB = "股票交易"
+DEFAULT_FUNDS_TAB = "基金部位"
+DEFAULT_FUND_TRADES_TAB = "基金交易"
 
 
 # ---------------------------------------------------------------------------
@@ -106,17 +108,54 @@ def _num(value: object, default: float = 0.0) -> float:
         return default
 
 
+def _num_or_none(value: object) -> float | None:
+    """Parse a number, but return None for empty/missing values (so the
+    caller can tell 'user left it blank' apart from 'user filled 0')."""
+    if value is None:
+        return None
+    s = str(value).replace(",", "").replace("$", "").strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
 def normalize_holding(row: dict) -> dict | None:
-    sym = row.get("symbol") or row.get("代號") or row.get("ticker") or ""
+    """Normalize a position row.
+
+    Accepts either ``total_cost`` (preferred, total NTD paid for the
+    position) **or** ``cost`` (legacy: per-share cost) and derives the
+    other.  Optional ``current_price`` lets the user manually override
+    the live Fugle price (e.g. when Fugle is down).
+    """
+    sym = (row.get("symbol") or row.get("代號") or row.get("ticker") or "")
     sym = str(sym).strip()
     if not sym:
         return None
+
+    shares = int(_num(row.get("shares") or row.get("股數")))
+
+    total_cost = _num(row.get("total_cost") or row.get("總成本"))
+    per_share = _num(row.get("cost") or row.get("成本") or row.get("成本價"))
+
+    # Derive whichever is missing.
+    if total_cost == 0 and per_share > 0 and shares > 0:
+        total_cost = per_share * shares
+    if per_share == 0 and total_cost > 0 and shares > 0:
+        per_share = total_cost / shares
+
     return {
-        "symbol":  sym,
-        "name":    row.get("name") or row.get("名稱") or "",
-        "shares":  int(_num(row.get("shares") or row.get("股數"))),
-        "cost":    _num(row.get("cost") or row.get("成本") or row.get("成本價")),
-        "notes":   row.get("notes") or row.get("備註") or "",
+        "symbol":         sym,
+        "name":           row.get("name") or row.get("名稱") or "",
+        "shares":         shares,
+        "total_cost":     round(total_cost, 2),
+        "cost_per_share": round(per_share, 4),
+        "current_price":  _num_or_none(
+            row.get("current_price") or row.get("目前價") or row.get("市價")),
+        "last_updated":   row.get("last_updated") or row.get("上次更新") or "",
+        "notes":          row.get("notes") or row.get("備註") or "",
     }
 
 
@@ -127,13 +166,17 @@ def normalize_trade(row: dict) -> dict | None:
         return None
     action = (row.get("action") or row.get("動作") or "").strip().upper()
     return {
-        "date":    row.get("date") or row.get("日期") or "",
-        "symbol":  sym,
-        "action":  action,
-        "shares":  int(_num(row.get("shares") or row.get("股數"))),
-        "price":   _num(row.get("price") or row.get("成交價")),
-        "fees":    _num(row.get("fees") or row.get("手續費")),
-        "notes":   row.get("notes") or row.get("備註") or "",
+        "date":       row.get("date") or row.get("日期") or "",
+        "symbol":     sym,
+        "action":     action,
+        "shares":     int(_num(row.get("shares") or row.get("股數"))),
+        "price":      _num(row.get("price") or row.get("成交價")),
+        "fees":       _num(row.get("fees") or row.get("手續費")),
+        # 新增:每筆交易的 total_cost(可選),做為 price + fees 的替代填法。
+        # BUY 時 = 你實際付的錢;SELL 時 = 你實際收到的錢(都可填,程式自己處理)
+        "total_cost": _num(row.get("total_cost") or row.get("總金額")
+                           or row.get("成交金額") or row.get("結算金額")),
+        "notes":      row.get("notes") or row.get("備註") or "",
     }
 
 
@@ -160,24 +203,34 @@ def load_trades() -> list[dict]:
 
 
 def normalize_fund(row: dict) -> dict | None:
-    """Accept either Chinese or English column headers for fund rows."""
-    fid = (row.get("代號") or row.get("fund_id")
+    """Normalize a fund row — same shape as ``normalize_holding`` but with
+    fund-specific naming (fund_id, units, current_nav)."""
+    fid = (row.get("fund_id") or row.get("代號")
            or row.get("id") or row.get("symbol") or "")
     fid = str(fid).strip()
     if not fid:
         return None
-    manual_nav = _num(
-        row.get("目前NAV") or row.get("目前 NAV")
-        or row.get("current_nav") or row.get("nav")
-    )
+
+    units = int(_num(row.get("units") or row.get("單位數")))
+
+    total_cost = _num(row.get("total_cost") or row.get("總成本"))
+    per_unit = _num(row.get("avg_cost") or row.get("平均成本") or row.get("cost"))
+
+    if total_cost == 0 and per_unit > 0 and units > 0:
+        total_cost = per_unit * units
+    if per_unit == 0 and total_cost > 0 and units > 0:
+        per_unit = total_cost / units
+
     return {
-        "fund_id":             fid,
-        "name":                row.get("名稱") or row.get("name") or "",
-        "units":               _num(row.get("單位數") or row.get("units")),
-        "avg_cost":            _num(row.get("平均成本") or row.get("avg_cost") or row.get("cost")),
-        "manual_nav":          manual_nav if manual_nav > 0 else None,
-        "last_updated_manual": row.get("上次更新") or row.get("last_updated") or "",
-        "notes":               row.get("備註") or row.get("notes") or "",
+        "fund_id":       fid,
+        "name":          row.get("name") or row.get("名稱") or "",
+        "units":         units,
+        "total_cost":    round(total_cost, 2),
+        "cost_per_unit": round(per_unit, 4),
+        "current_nav":   _num_or_none(
+            row.get("current_nav") or row.get("目前NAV") or row.get("目前 NAV")),
+        "last_updated":  row.get("last_updated") or row.get("上次更新") or "",
+        "notes":         row.get("notes") or row.get("備註") or "",
     }
 
 
@@ -187,4 +240,33 @@ def load_funds() -> list[dict]:
     if rows and rows[0].get("_error"):
         return rows
     out = [normalize_fund(r) for r in rows]
+    return [r for r in out if r is not None]
+
+
+def normalize_fund_trade(row: dict) -> dict | None:
+    """One fund transaction row (parallel to normalize_trade for stocks)."""
+    fid = (row.get("fund_id") or row.get("代號") or "").strip()
+    if not fid:
+        return None
+    action = (row.get("action") or row.get("動作") or "").strip().upper()
+    return {
+        "date":       row.get("date") or row.get("日期") or "",
+        "fund_id":    fid,
+        "action":     action,
+        "units":      int(_num(row.get("units") or row.get("單位數"))),
+        "nav":        _num(row.get("nav") or row.get("price") or row.get("成交價")),
+        "fees":       _num(row.get("fees") or row.get("手續費")),
+        # 同 normalize_trade:支援 total_cost 作為 nav + fees 的替代填法
+        "total_cost": _num(row.get("total_cost") or row.get("總金額")
+                           or row.get("申購金額") or row.get("贖回金額")),
+        "notes":      row.get("notes") or row.get("備註") or "",
+    }
+
+
+def load_fund_trades() -> list[dict]:
+    tab = os.getenv(FUND_TRADES_TAB_ENV, DEFAULT_FUND_TRADES_TAB)
+    rows = fetch_tab(tab)
+    if rows and rows[0].get("_error"):
+        return rows
+    out = [normalize_fund_trade(r) for r in rows]
     return [r for r in out if r is not None]
