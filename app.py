@@ -27,11 +27,14 @@ def _load_secrets_into_env() -> None:
         "FUGLE_RATE_LIMIT_SLEEP",
         "FUGLE_AGENT_MAX_STEPS",
         "APP_PASSWORD",
-        # Portfolio (Google Sheets)
+        # Portfolio (Google Sheets — 讀)
         "PORTFOLIO_SHEET_URL",
         "PORTFOLIO_POSITIONS_TAB",
         "PORTFOLIO_TRADES_TAB",
         "PORTFOLIO_FUNDS_TAB",
+        "PORTFOLIO_FUND_TRADES_TAB",
+        # Apps Script Web App URL (寫)
+        "SHEETS_WRITER_URL",
         # 個人化偏好(費率、投資風格)— 直接注入 system prompt
         "USER_CONTEXT",
         # 內建工具控制
