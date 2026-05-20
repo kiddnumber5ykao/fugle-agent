@@ -17,6 +17,7 @@ import asyncio
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 from typing import AsyncIterator
 
 import anthropic  # type: ignore
@@ -82,6 +83,15 @@ SYSTEM_PROMPT = """你是「史塔克」— 使用者的個人台股管理助理
 你目前運行於 {mode} 模式 — mock 模式下的市場資料是隨機生成的,僅供示範,
 請在開頭明確提醒「以下為 mock 假資料」。Live 模式 (📡) 才是真實 Fugle 行情。
 
+== 時間 ==
+**現在時間:{current_time}**
+- 台股盤中:週一至週五 09:00 – 13:30(台北時間)
+- 台股盤後 / 週末 / 國定假日:Fugle 報價會是「上個交易日的收盤價」
+- 美股盤中(換算台北時間):
+  - 夏令時間(3 月~11 月初):週一至週五 21:30 – 翌日 04:00
+  - 冬令時間(11 月初~3 月):週一至週五 22:30 – 翌日 05:00
+- 看到「今天」「現在」「最近」等詞,**用上面那個時間判斷**,不要憑想像
+
 == 使用者個人設定 ==
 {user_context}
 
@@ -98,6 +108,28 @@ def _user_context() -> str:
             "計算淨損益時請套用台股預設:"
             "買進手續費 0.1425%、賣出手續費 0.1425%、賣出證交稅 0.3%。"
             "並提醒使用者可在 Streamlit Secrets 加上 USER_CONTEXT 來指定個人費率。)")
+
+
+_WEEKDAY_TW = ["一", "二", "三", "四", "五", "六", "日"]
+
+
+def _now_tw() -> str:
+    """目前的台北時間,含星期、盤中 / 盤後判斷。"""
+    utc_now = datetime.now(timezone.utc)
+    tw_now = utc_now.astimezone(timezone(timedelta(hours=8)))
+    weekday_ch = _WEEKDAY_TW[tw_now.weekday()]
+    is_weekday = tw_now.weekday() < 5
+    h, m = tw_now.hour, tw_now.minute
+    in_session = is_weekday and (
+        (h == 9) or (10 <= h < 13) or (h == 13 and m <= 30)
+    )
+    status = "📈 台股盤中" if in_session else (
+        "🌙 台股盤後 / 收盤" if is_weekday else "🛌 週末或假日,台股沒開盤"
+    )
+    return (
+        f"{tw_now.strftime('%Y-%m-%d')} 星期{weekday_ch} "
+        f"{tw_now.strftime('%H:%M')}(台北時間,UTC+8){status}"
+    )
 
 
 # ---------- tool registry ----------
@@ -211,7 +243,11 @@ async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[di
     client = anthropic.AsyncAnthropic(api_key=_api_key())
     tools = _anthropic_tool_specs()
     mode_str = "mock" if SETTINGS.mock else "live"
-    system_text = SYSTEM_PROMPT.format(mode=mode_str, user_context=_user_context())
+    system_text = SYSTEM_PROMPT.format(
+        mode=mode_str,
+        user_context=_user_context(),
+        current_time=_now_tw(),
+    )
 
     # Bound history BEFORE appending — keeps the conversation context
     # within token / rate-limit budget even on long sessions.
