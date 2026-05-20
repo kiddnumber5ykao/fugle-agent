@@ -26,9 +26,11 @@ import urllib.request
 SHEET_URL_ENV = "PORTFOLIO_SHEET_URL"
 POSITIONS_TAB_ENV = "PORTFOLIO_POSITIONS_TAB"
 TRADES_TAB_ENV = "PORTFOLIO_TRADES_TAB"
+FUNDS_TAB_ENV = "PORTFOLIO_FUNDS_TAB"
 
 DEFAULT_POSITIONS_TAB = "持股"
 DEFAULT_TRADES_TAB = "交易紀錄"
+DEFAULT_FUNDS_TAB = "基金"
 
 
 # ---------------------------------------------------------------------------
@@ -154,4 +156,35 @@ def load_trades() -> list[dict]:
     if rows and rows[0].get("_error"):
         return rows
     out = [normalize_trade(r) for r in rows]
+    return [r for r in out if r is not None]
+
+
+def normalize_fund(row: dict) -> dict | None:
+    """Accept either Chinese or English column headers for fund rows."""
+    fid = (row.get("代號") or row.get("fund_id")
+           or row.get("id") or row.get("symbol") or "")
+    fid = str(fid).strip()
+    if not fid:
+        return None
+    manual_nav = _num(
+        row.get("目前NAV") or row.get("目前 NAV")
+        or row.get("current_nav") or row.get("nav")
+    )
+    return {
+        "fund_id":             fid,
+        "name":                row.get("名稱") or row.get("name") or "",
+        "units":               _num(row.get("單位數") or row.get("units")),
+        "avg_cost":            _num(row.get("平均成本") or row.get("avg_cost") or row.get("cost")),
+        "manual_nav":          manual_nav if manual_nav > 0 else None,
+        "last_updated_manual": row.get("上次更新") or row.get("last_updated") or "",
+        "notes":               row.get("備註") or row.get("notes") or "",
+    }
+
+
+def load_funds() -> list[dict]:
+    tab = os.getenv(FUNDS_TAB_ENV, DEFAULT_FUNDS_TAB)
+    rows = fetch_tab(tab)
+    if rows and rows[0].get("_error"):
+        return rows
+    out = [normalize_fund(r) for r in rows]
     return [r for r in out if r is not None]

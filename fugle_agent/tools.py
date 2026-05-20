@@ -34,6 +34,7 @@ except Exception:  # pragma: no cover — fallback for unit tests / mock-only us
         return deco
 
 from . import backtest as bt
+from . import fund_data
 from . import sheets
 from . import us_market
 from .client import FugleClient
@@ -400,9 +401,51 @@ async def get_stock_news(args: dict) -> dict:
                       "n_items": len(items), "items": items})
 
 
+# ---------- 基金(Google Sheet 持有清單 + cnyes 即時 NAV) ----------
+
+@tool(
+    "get_my_funds",
+    "讀取使用者目前持有的基金(來自 Google Sheet「基金」分頁)。"
+    "回傳每檔基金的代號、名稱、單位數、平均成本 NAV、手動填的目前 NAV(如有)、備註。"
+    "要算淨值 / 損益:先用這個拿清單,再對每檔呼叫 get_fund_nav 抓即時 NAV;"
+    "如果 get_fund_nav 抓不到(失敗),改用 manual_nav 兜底。",
+    {"type": "object", "properties": {}, "required": []},
+)
+async def get_my_funds(args: dict) -> dict:
+    funds = sheets.load_funds()
+    if funds and funds[0].get("_error"):
+        return _envelope({"error": funds[0]["_error"]})
+    return _envelope({
+        "n_funds": len(funds),
+        "funds": funds,
+        "note": "如果某檔 fund 沒有 manual_nav,先呼叫 get_fund_nav 抓即時值;"
+                "如果 get_fund_nav 也失敗,就告訴使用者「需要手動更新 Sheet 上的 NAV」。",
+    })
+
+
+@tool(
+    "get_fund_nav",
+    "從鉅亨網 cnyes.com 即時抓取單一基金的最新 NAV。"
+    "因為 cnyes 沒公開 API,這是 best-effort 爬蟲 — 偶爾可能抓不到,"
+    "失敗時會回 {error: ...},agent 應該告訴使用者改用 Sheet 上的手動 NAV。",
+    {
+        "type": "object",
+        "properties": {
+            "fund_id": {"type": "string", "description": "鉅亨網的基金代號,如 T101.001、LU0079474960"},
+        },
+        "required": ["fund_id"],
+    },
+)
+async def get_fund_nav(args: dict) -> dict:
+    data = fund_data.fetch_nav(args["fund_id"])
+    return _envelope({"source": "cnyes", **data})
+
+
 ALL_TOOLS = [
     get_my_portfolio,
     get_trade_log,
+    get_my_funds,
+    get_fund_nav,
     get_us_quote,
     get_us_candles,
     get_stock_news,

@@ -40,6 +40,8 @@ SYSTEM_PROMPT = """你是「史塔克」— 使用者的個人台股管理助理
 【使用者個人資料(從 Google Sheet 讀)】
 - get_my_portfolio: 目前持股(代號、股數、平均成本、備註)
 - get_trade_log: 完整買賣紀錄(可依 symbol / action 過濾)
+- get_my_funds: 目前持有的基金(代號、名稱、單位數、平均 NAV、手動 NAV)
+- get_fund_nav: 從鉅亨網 cnyes 即時抓單一基金 NAV(best-effort,可能失敗 → 用 manual_nav 兜底)
 
 【台股市場資料(Fugle Market Data API)】
 - get_quote: 台股即時報價 — 代號是 4 位數字(2330、0050、2454)
