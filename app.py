@@ -199,7 +199,13 @@ def _consume_turn(prompt: str, text_box, tool_log):
                         )
             elif kind == "history_trimmed":
                 with tool_log:
-                    st.caption(f"♻️ 已自動丟掉 {event['dropped']} 則舊訊息以省 token")
+                    parts = []
+                    if event.get("compacted"):
+                        parts.append(f"壓縮 {event['compacted']} 筆舊工具結果")
+                    if event.get("dropped"):
+                        parts.append(f"丟掉 {event['dropped']} 則最舊訊息")
+                    if parts:
+                        st.caption("♻️ " + "、".join(parts) + "(省 token)")
             elif kind == "max_steps_reached":
                 text_buffer[0] += f"\n\n_(達到最大 {event['steps']} 步,中止)_"
                 text_box.markdown(text_buffer[0])
