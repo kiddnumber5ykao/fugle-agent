@@ -29,8 +29,14 @@ MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 MAX_STEPS = int(os.getenv("FUGLE_AGENT_MAX_STEPS", "12"))
 MAX_TOKENS = int(os.getenv("ANTHROPIC_MAX_TOKENS", "4096"))
 # Sliding window: keep at most this many recent messages in the LLM context.
-# Older ones get dropped to bound token usage / rate-limit risk.
-MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "24"))
+# Older ones get *compacted* first(tool_result 大塊 JSON 換成短 stub),
+# 只有再超出才會真的丟掉,讓上下文記憶比舊版深 2-3 倍。
+MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "60"))
+# 最近 N 個「新 user 訊息」的 tool_result 保留完整,更舊的會被 compact。
+COMPACT_KEEP_RECENT_TURNS = int(os.getenv("COMPACT_KEEP_RECENT_TURNS", "6"))
+# Anthropic SDK 預設 60s 容易在 web_search 多跳時超時,拉長 + 加重試。
+ANTHROPIC_TIMEOUT = float(os.getenv("ANTHROPIC_TIMEOUT", "300"))
+ANTHROPIC_MAX_RETRIES = int(os.getenv("ANTHROPIC_MAX_RETRIES", "2"))
 
 SYSTEM_PROMPT = """你是「史塔克」— 使用者的個人台股管理助理(命名出自 Tony Stark)。
 你的角色是個盡責的私人量化分析師,read-only,絕對不下單。
@@ -76,6 +82,9 @@ SYSTEM_PROMPT = """你是「史塔克」— 使用者的個人台股管理助理
 - 基金:get_fund_nav(cnyes 即時)→ 失敗才看 `current_nav` 欄位
 
 【台股市場資料(Fugle Market Data API)】
+- search_taiwan_symbol: **依公司名稱查代號** — 使用者沒給代號、只給名字
+  (「台積電」「玉山金」「半導體 ETF」)時,**一定先呼叫這個**確認代號,
+  不要憑記憶猜,常會猜錯到同名公司(玉山金 vs 玉山銀;群創 vs 群益)。
 - get_quote: 台股即時報價 — 代號是 4 位數字(2330、0050、2454)
 - get_candles: 台股日 K 線歷史
 - get_intraday_ticks: 台股盤中逐筆
@@ -97,6 +106,9 @@ SYSTEM_PROMPT = """你是「史塔克」— 使用者的個人台股管理助理
 ⚠️ 工具選擇規則:
 - 看到 4 位數字代號(2330)→ 台股,用 get_quote / get_candles
 - 看到英文代號(AAPL)→ 美股,用 get_us_quote / get_us_candles
+- **看到中文公司名沒給代號**(「台積電」「玉山金」「中信金」「鴻海」…)
+  → **必先 search_taiwan_symbol 確認代號** → 再用 get_quote 等工具。
+  禁止憑記憶猜代號,常會把「玉山金」打成「玉山銀」、「群益」「群創」也常混。
 - 個股新聞 → get_stock_news(台股要加 .TW)
 - 總體 / 政策 / 「市場現在怎麼了」→ web_search
 
@@ -231,6 +243,63 @@ def _blocks_to_dicts(blocks) -> list[dict]:
     return out
 
 
+def _compact_old_tool_results(history: list, *, keep_recent_turns: int,
+                              stub_max_chars: int = 400) -> int:
+    """把舊訊息裡的 tool_result 大塊內容換成短 stub,只保留前 ``stub_max_chars`` 字。
+
+    為什麼這樣做:工具結果(尤其 get_my_portfolio / get_candles / web_search)
+    動輒 5-50 KB JSON,token 吃超兇。對話脈絡其實只需要 user 訊息 + assistant
+    的回答文字,舊工具結果換成短 stub 之後 agent 依然知道「我那時呼叫過什麼、
+    結果大致長什麼樣」,需要時可以再叫一次工具。
+
+    我們用「新 user 訊息」(content 是 str)當對話回合分界 — 最近
+    ``keep_recent_turns`` 個回合的 tool_result 保留完整,更舊的才 compact。
+
+    Returns 壓縮的 tool_result block 數量(供 UI 顯示)。
+    """
+    # 找出所有「新 user 訊息」的位置 — 這代表一個新對話回合的開始
+    fresh_user_indices = [
+        i for i, m in enumerate(history)
+        if m.get("role") == "user" and isinstance(m.get("content"), str)
+    ]
+    if len(fresh_user_indices) <= keep_recent_turns:
+        return 0
+    # 第一個「要保留」的新 user 訊息的 index — 在它之前的全部都 compact
+    cutoff = fresh_user_indices[-keep_recent_turns]
+
+    compacted = 0
+    for i in range(cutoff):
+        msg = history[i]
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for blk in content:
+            if not isinstance(blk, dict):
+                continue
+            if blk.get("type") != "tool_result":
+                continue
+            raw = blk.get("content")
+            # tool_result 的 content 有兩種格式:純字串、或 [{"type":"text","text":"..."}]
+            if isinstance(raw, str):
+                if len(raw) > stub_max_chars:
+                    blk["content"] = (
+                        raw[:stub_max_chars]
+                        + f"...(舊工具結果省略,原長 {len(raw)} 字元)"
+                    )
+                    compacted += 1
+            elif isinstance(raw, list):
+                for sub in raw:
+                    if isinstance(sub, dict) and sub.get("type") == "text":
+                        text = sub.get("text", "")
+                        if len(text) > stub_max_chars:
+                            sub["text"] = (
+                                text[:stub_max_chars]
+                                + f"...(舊工具結果省略,原長 {len(text)} 字元)"
+                            )
+                            compacted += 1
+    return compacted
+
+
 def _trim_history_inplace(history: list, *, max_messages: int) -> int:
     """Drop oldest messages to keep history within ``max_messages``.
 
@@ -274,7 +343,11 @@ async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[di
         {"type": "tool_result", "name": str, "result": str}
         {"type": "max_steps_reached", "steps": int}
     """
-    client = anthropic.AsyncAnthropic(api_key=_api_key())
+    client = anthropic.AsyncAnthropic(
+        api_key=_api_key(),
+        timeout=ANTHROPIC_TIMEOUT,
+        max_retries=ANTHROPIC_MAX_RETRIES,
+    )
     tools = _anthropic_tool_specs()
     mode_str = "mock" if SETTINGS.mock else "live"
     system_text = SYSTEM_PROMPT.format(
@@ -283,11 +356,14 @@ async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[di
         current_time=_now_tw(),
     )
 
-    # Bound history BEFORE appending — keeps the conversation context
-    # within token / rate-limit budget even on long sessions.
+    # 兩段式縮減上下文:
+    # (1) Compact 舊工具結果(留前 400 字 stub) — 大幅省 token,對話脈絡保留
+    # (2) 若仍超出 MAX_HISTORY_MESSAGES,才從前面切掉訊息
+    compacted = _compact_old_tool_results(
+        history, keep_recent_turns=COMPACT_KEEP_RECENT_TURNS)
     dropped = _trim_history_inplace(history, max_messages=MAX_HISTORY_MESSAGES - 2)
-    if dropped:
-        yield {"type": "history_trimmed", "dropped": dropped}
+    if compacted or dropped:
+        yield {"type": "history_trimmed", "dropped": dropped, "compacted": compacted}
 
     history.append({"role": "user", "content": user_input})
 

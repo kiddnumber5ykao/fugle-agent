@@ -37,6 +37,7 @@ from . import backtest as bt
 from . import fund_data
 from . import sheets
 from . import sheets_writer
+from . import symbol_lookup
 from . import us_market
 from .client import FugleClient
 from .indicators import ema, rsi, sma
@@ -146,6 +147,40 @@ async def get_market_movers(args: dict) -> dict:
         direction=args.get("direction", "up"),
     )
     return _envelope({"mode": _client.mode, **data})
+
+
+# ---------- 中文名稱 → 代號查詢(超重要,使用者常用名字而非代號) ----------
+
+@tool(
+    "search_taiwan_symbol",
+    "依公司中文/英文名稱、暱稱、舊名,查詢正確的台股代號。"
+    "**只要使用者沒明確給代號、只給名字(例如「台積電」「玉山金」「0050」「半導體 ETF」),"
+    "一定要先呼叫這個工具確認代號**,不要憑記憶猜——常會猜錯到同名公司。"
+    "回傳前 5 筆候選(symbol + name)。命中 1 筆就直接用,有多筆要回顯給使用者挑。",
+    {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string",
+                      "description": "公司中文名、英文名、代號片段都可,例如「玉山金」「TSMC」「0050」「半導體」"},
+            "limit": {"type": "integer", "default": 5, "minimum": 1, "maximum": 10},
+        },
+        "required": ["query"],
+    },
+)
+async def search_taiwan_symbol(args: dict) -> dict:
+    query = str(args.get("query") or "").strip()
+    limit = int(args.get("limit") or 5)
+    if not query:
+        return _envelope({"error": "query 不能為空"})
+    hits = symbol_lookup.search(query, fugle_client=_client, limit=limit)
+    return _envelope({
+        "mode":    _client.mode,
+        "query":   query,
+        "n_hits":  len(hits),
+        "hits":    hits,
+        "note":    ("命中 1 筆 → 直接使用;命中多筆 → 回顯給使用者挑;"
+                    "命中 0 筆 → 告訴使用者「沒找到,請給代號」,不要硬猜。"),
+    })
 
 
 # ---------- indicators ----------
@@ -849,6 +884,7 @@ ALL_TOOLS = [
     get_us_quote,
     get_us_candles,
     get_stock_news,
+    search_taiwan_symbol,
     get_quote,
     get_candles,
     get_intraday_ticks,

@@ -38,7 +38,7 @@ _DETAIL_URLS = [
 # Low-level HTTP fetch
 # ---------------------------------------------------------------------------
 
-def _http_get(url: str, timeout: int = 12) -> str | None:
+def _http_get(url: str, timeout: int = 20) -> str | None:
     try:
         req = urllib.request.Request(url, headers={
             "User-Agent":      USER_AGENT,
@@ -171,6 +171,6 @@ def fetch_nav(fund_id: str) -> dict:
         "error": (
             f"無法從 cnyes 抓到 NAV({last_err})。"
             "可能原因:基金代號錯誤、cnyes 改版、Streamlit Cloud IP 被擋。"
-            "請改用 Sheet「基金」分頁的「目前 NAV」欄位手動填值兜底。"
+            "請改用 Sheet「基金部位」分頁的「current_nav」欄位手動填值兜底。"
         ),
     }

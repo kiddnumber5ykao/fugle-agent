@@ -52,7 +52,7 @@ def _csv_url(sheet_id: str, tab_name: str) -> str:
 
 
 def fetch_tab(tab_name: str, *, sheet_url: str | None = None,
-              timeout: int = 10) -> list[dict]:
+              timeout: int = 20) -> list[dict]:
     """Fetch one tab as a list of ``{column: value}`` row dicts.
 
     Returns a single-element list containing ``{"_error": "..."}`` on failure
