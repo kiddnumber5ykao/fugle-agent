@@ -1231,6 +1231,220 @@ async def valuate_portfolio(args: dict) -> dict:
 
 
 @tool(
+    "sync_portfolio_from_trades",
+    "**一鍵全套同步**:從「股票交易」歷史 → 重建「股票部位」每檔的 shares + total_cost → "
+    "對每檔自動補名字 → 抓 Fugle 即時價 → 套手續費 + 稅算出市值/淨賣出/未實現損益 → "
+    "**全部寫回 Sheet**(包含部位欄位 + 估值欄位 + 估算時間)。"
+    "適用情境:使用者剛**手動加了交易**,想要一次把所有東西算好填滿,不用分兩步呼叫。"
+    "Sheet 上沒加的估值欄位會被忽略(不會壞),回應裡有 sheet_diagnostics 告訴你哪些匹配到。",
+    {
+        "type": "object",
+        "properties": {
+            "fee_rate": {"type": "number"},
+            "fee_min":  {"type": "number"},
+        },
+        "required": [],
+    },
+)
+async def sync_portfolio_from_trades(args: dict) -> dict:
+    fee_rate = float((args or {}).get("fee_rate")
+                     or os.getenv("USER_FEE_RATE", "0.001425"))
+    fee_min  = float((args or {}).get("fee_min")
+                     or os.getenv("USER_FEE_MIN", "1"))
+    valuated_at = _now_tw_str()
+
+    # ─── 1) 讀股票交易 ─────────────────────────────────────────
+    trades = sheets.load_trades()
+    if trades and trades[0].get("_error"):
+        return _envelope({"error": trades[0]["_error"]})
+
+    # ─── 2) 依日期排序,在記憶體裡跑加總 / 加權平均扣減 ──────
+    trades_sorted = sorted(trades, key=lambda t: t.get("date", ""))
+    by_sym: dict[str, dict] = {}
+    for t in trades_sorted:
+        sym = t.get("symbol", "")
+        if not sym:
+            continue
+        if sym not in by_sym:
+            by_sym[sym] = {"shares": 0, "total_cost": 0.0, "last_date": ""}
+        row = by_sym[sym]
+        action = (t.get("action") or "").upper()
+        sh = int(t.get("shares") or 0)
+        pr = float(t.get("price") or 0)
+        fe = float(t.get("fees") or 0)
+        tc = float(t.get("total_cost") or 0)
+        if action == "BUY":
+            cost_added = tc if tc > 0 else (sh * pr + fe)
+            row["shares"] += sh
+            row["total_cost"] += cost_added
+        elif action == "SELL" and row["shares"] > 0:
+            avg = row["total_cost"] / row["shares"]
+            sell_shares = min(sh, row["shares"])
+            row["shares"] -= sell_shares
+            row["total_cost"] -= avg * sell_shares
+        row["last_date"] = t.get("date", "") or row["last_date"]
+
+    # ─── 3) 讀目前部位,拿 name / notes / current_price 兜底 ─────
+    cur_positions = sheets.load_positions()
+    cur_meta: dict[str, dict] = {}
+    if cur_positions and not (cur_positions[0].get("_error")):
+        cur_meta = {p["symbol"]: p for p in cur_positions}
+
+    # 探 sheet 實際存在哪些估值欄位,讓回應能告訴使用者匹配狀況
+    valuation_headers_en = {"current_price", "market_value", "net_proceeds",
+                            "unrealized_pnl", "pnl_pct", "valuated_at"}
+    valuation_headers_zh = {"現價", "市值", "淨賣出", "未實現損益", "損益%", "估算時間"}
+    tab_name = os.getenv(sheets.POSITIONS_TAB_ENV, sheets.DEFAULT_POSITIONS_TAB)
+    raw = sheets.fetch_tab(tab_name)
+    sheet_headers: set[str] = (set(raw[0].keys()) if (raw and not raw[0].get("_error"))
+                               else set())
+    matched_val_headers = (valuation_headers_en | valuation_headers_zh) & sheet_headers
+
+    # ─── 4) 對每檔抓即時價 + 算估值 + 寫回 ─────────────────────
+    details: list[dict] = []
+    sum_cost = sum_gross = sum_fee = sum_tax = sum_net = 0.0
+
+    for sym, data in by_sym.items():
+        shares = int(data["shares"])
+        total_cost = round(data["total_cost"], 2)
+        if shares <= 0 or total_cost <= 0:
+            details.append({"symbol": sym, "skipped": "shares ≤ 0(全部賣完)"})
+            continue
+
+        meta = cur_meta.get(sym, {})
+        name  = meta.get("name") or _lookup_stock_name(sym)
+        notes = meta.get("notes", "")
+
+        # 抓即時價:Fugle 優先,失敗用 Sheet 上原本的 current_price
+        price: float | None = None
+        price_source = "none"
+        try:
+            q = _client.quote(sym)
+            for k in ("lastPrice", "closePrice", "price",
+                      "referencePrice", "previousClose"):
+                v = q.get(k) if isinstance(q, dict) else None
+                if v:
+                    price = float(v)
+                    price_source = f"fugle.{k}"
+                    break
+        except Exception:
+            pass
+        if not price:
+            manual = meta.get("current_price")
+            if manual:
+                try:
+                    price = float(manual)
+                    price_source = "sheet.current_price"
+                except (TypeError, ValueError):
+                    price = None
+
+        is_etf   = sym.startswith("00") and len(sym) >= 4
+        tax_rate = 0.001 if is_etf else 0.003
+
+        # 部位基本欄位(這些一定寫)
+        payload: dict[str, Any] = {
+            "symbol":       sym,
+            "name":         name,
+            "shares":       shares,
+            "total_cost":   total_cost,
+            "last_updated": data["last_date"],
+        }
+        if notes:
+            payload["notes"] = notes
+
+        # 估值欄位(有抓到價才算)
+        if price and price > 0:
+            gross = price * shares
+            fee   = max(fee_min, gross * fee_rate)
+            tax   = gross * tax_rate
+            net   = gross - fee - tax
+            pnl   = net - total_cost
+            pct   = (pnl / total_cost * 100) if total_cost else 0.0
+
+            sum_cost  += total_cost
+            sum_gross += gross
+            sum_fee   += fee
+            sum_tax   += tax
+            sum_net   += net
+
+            payload.update({
+                "current_price":  round(price, 4),
+                "market_value":   round(gross, 2),
+                "net_proceeds":   round(net, 2),
+                "unrealized_pnl": round(pnl, 2),
+                "pnl_pct":        round(pct, 2),
+                "valuated_at":    valuated_at,
+                # 中文 alias
+                "現價":           round(price, 4),
+                "市值":           round(gross, 2),
+                "淨賣出":         round(net, 2),
+                "未實現損益":     round(pnl, 2),
+                "損益%":          round(pct, 2),
+                "估算時間":       valuated_at,
+            })
+            row_summary = {
+                "symbol": sym, "name": name, "shares": shares,
+                "total_cost": total_cost,
+                "current_price": round(price, 4),
+                "price_source": price_source,
+                "unrealized_pnl": round(pnl, 2),
+                "pnl_pct": round(pct, 2),
+            }
+        else:
+            row_summary = {
+                "symbol": sym, "name": name, "shares": shares,
+                "total_cost": total_cost,
+                "warning": "抓不到現價,估值欄位這次不寫;部位本身已更新",
+            }
+
+        upd = sheets_writer.upsert_position(**payload)
+        row_summary["written_to_sheet"] = bool(upd.get("ok"))
+        if not upd.get("ok"):
+            row_summary["error"] = upd.get("error")
+        details.append(row_summary)
+
+    total_pnl     = sum_net - sum_cost
+    total_pnl_pct = (total_pnl / sum_cost * 100) if sum_cost else 0.0
+
+    write_warning = None
+    if not sheet_headers:
+        write_warning = ("讀不到「股票部位」分頁的欄位 — 確認 PORTFOLIO_SHEET_URL 設好。")
+    elif not matched_val_headers:
+        write_warning = (
+            "你的「股票部位」分頁還沒加估值欄位,所以市值/損益等數字寫不進去。"
+            "請加任一英文或中文欄位:current_price / market_value / net_proceeds / "
+            "unrealized_pnl / pnl_pct / valuated_at(或對應中文 現價 / 市值 / "
+            "淨賣出 / 未實現損益 / 損益% / 估算時間)。"
+        )
+
+    return _envelope({
+        "ok":            True,
+        "mode":          _client.mode,
+        "valuated_at":   valuated_at,
+        "fee_rate_used": fee_rate,
+        "fee_min_used":  fee_min,
+        "n_positions":   sum(1 for d in details if not d.get("skipped")),
+        "details":       details,
+        "summary": {
+            "total_cost":           round(sum_cost, 2),
+            "total_gross_proceeds": round(sum_gross, 2),
+            "total_sell_fee":       round(sum_fee, 2),
+            "total_sell_tax":       round(sum_tax, 2),
+            "total_net_proceeds":   round(sum_net, 2),
+            "total_unrealized_pnl": round(total_pnl, 2),
+            "total_pnl_pct":        round(total_pnl_pct, 2),
+        },
+        "sheet_diagnostics": {
+            "sheet_headers_found": sorted(sheet_headers),
+            "matched_val_headers": sorted(matched_val_headers),
+            "warning":             write_warning,
+        },
+        "note": ("一鍵同步完成:重建部位 + 抓即時價 + 算估值 + 寫回 Sheet。"
+                 "下次再加交易,直接再叫一次就好。"),
+    })
+
+
+@tool(
     "ping_sheets_writer",
     "測試 Apps Script Web App 是否能正常呼叫。回傳 {ok: true, pong: 時間戳} 代表通了。"
     "用來 debug SHEETS_WRITER_URL 設定。",
@@ -1253,6 +1467,7 @@ ALL_TOOLS = [
     backfill_position_names,
     backfill_fund_names,
     valuate_portfolio,
+    sync_portfolio_from_trades,
     ping_sheets_writer,
     get_us_quote,
     get_us_candles,
