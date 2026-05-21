@@ -12,7 +12,15 @@ NOT place orders.
 from __future__ import annotations
 
 import json
+import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+
+def _now_tw_str() -> str:
+    """目前台北時間 — 給 Sheet 用的人眼可讀格式。"""
+    tw = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+    return tw.strftime("%Y-%m-%d %H:%M:%S")
 
 try:  # the SDK is only required when running the real agent — tests can skip
     from claude_agent_sdk import tool  # type: ignore
@@ -1022,6 +1030,173 @@ async def backfill_fund_names(args: dict) -> dict:
 
 
 @tool(
+    "valuate_portfolio",
+    "**估算現在如果全部賣掉的真實淨損益**(已扣手續費 + 證交稅)。"
+    "對每檔股票部位:"
+    "(1) 抓即時報價(Fugle live;失敗用 Sheet 上 current_price 兜底);"
+    "(2) ETF(代號 00 開頭如 0050、00878)套證交稅 0.1%、一般股套 0.3%;"
+    "(3) 套使用者手續費率(預設 0.1425%、下限 NT$1);"
+    "(4) 算淨賣出金額、未實現損益、損益%、加總。"
+    "**(5) 預設會把結果寫回「股票部位」分頁的 market_value / net_proceeds / "
+    "unrealized_pnl / pnl_pct / valuated_at 欄位**(沒有這些欄位就會自動忽略,"
+    "不會打壞 Sheet)。傳 write_back=false 可以只算不寫。"
+    "回傳:每檔一行明細 + 總計。",
+    {
+        "type": "object",
+        "properties": {
+            "fee_rate": {"type": "number",
+                         "description": "選填,override 預設 0.1425%(用小數,如 0.001425)"},
+            "fee_min":  {"type": "number",
+                         "description": "選填,override 預設 NT$1 手續費下限"},
+            "write_back": {"type": "boolean", "default": True,
+                           "description": "True(預設)= 算完寫回 Sheet;False = 只算不寫"},
+        },
+        "required": [],
+    },
+)
+async def valuate_portfolio(args: dict) -> dict:
+    fee_rate = float((args or {}).get("fee_rate")
+                     or os.getenv("USER_FEE_RATE", "0.001425"))
+    fee_min  = float((args or {}).get("fee_min")
+                     or os.getenv("USER_FEE_MIN", "1"))
+    write_back = bool((args or {}).get("write_back", True))
+    valuated_at = _now_tw_str()
+
+    positions = sheets.load_positions()
+    if positions and positions[0].get("_error"):
+        return _envelope({"error": positions[0]["_error"]})
+
+    rows: list[dict] = []
+    sum_cost = sum_gross = sum_fee = sum_tax = sum_net = 0.0
+
+    for p in positions:
+        sym    = str(p.get("symbol", "")).strip()
+        shares = int(p.get("shares") or 0)
+        total_cost = float(p.get("total_cost") or 0)
+        if shares <= 0 or total_cost <= 0:
+            continue
+
+        # 1) 抓即時價 — Fugle 優先,失敗用 Sheet 上的 manual current_price
+        price: float | None = None
+        price_source = "none"
+        try:
+            q = _client.quote(sym)
+            for k in ("lastPrice", "closePrice", "price",
+                      "referencePrice", "previousClose"):
+                v = q.get(k) if isinstance(q, dict) else None
+                if v:
+                    price = float(v)
+                    price_source = f"fugle.{k}"
+                    break
+        except Exception:
+            pass
+        if price is None or price <= 0:
+            manual = p.get("current_price")
+            if manual:
+                try:
+                    price = float(manual)
+                    price_source = "sheet.current_price"
+                except (TypeError, ValueError):
+                    price = None
+
+        if not price:
+            rows.append({
+                "symbol":     sym,
+                "name":       p.get("name", ""),
+                "shares":     shares,
+                "total_cost": round(total_cost, 2),
+                "error":      "現價抓不到 — Fugle 失敗且 Sheet 沒填 current_price",
+            })
+            continue
+
+        # 2) 算稅率(ETF vs 一般股)
+        is_etf = sym.startswith("00") and len(sym) >= 4
+        tax_rate = 0.001 if is_etf else 0.003
+
+        # 3) 套公式
+        gross = price * shares
+        fee   = max(fee_min, gross * fee_rate)
+        tax   = gross * tax_rate
+        net   = gross - fee - tax
+        pnl   = net - total_cost
+        pct   = (pnl / total_cost * 100) if total_cost else 0.0
+
+        sum_cost  += total_cost
+        sum_gross += gross
+        sum_fee   += fee
+        sum_tax   += tax
+        sum_net   += net
+
+        row = {
+            "symbol":         sym,
+            "name":           p.get("name", ""),
+            "shares":         shares,
+            "cost_per_share": round(total_cost / shares, 4) if shares else 0,
+            "total_cost":     round(total_cost, 2),
+            "current_price":  round(price, 4),
+            "price_source":   price_source,
+            "is_etf":         is_etf,
+            "tax_rate":       tax_rate,
+            "gross_proceeds": round(gross, 2),
+            "sell_fee":       round(fee, 2),
+            "sell_tax":       round(tax, 2),
+            "net_proceeds":   round(net, 2),
+            "unrealized_pnl": round(pnl, 2),
+            "pnl_pct":        round(pct, 2),
+            "valuated_at":    valuated_at,
+        }
+
+        # 寫回 Sheet — 連英文 + 中文 header 一起送,只有 sheet 上實際存在的欄位會被填
+        if write_back:
+            sheet_payload = {
+                "symbol":         sym,
+                "current_price":  round(price, 4),
+                "market_value":   round(gross, 2),
+                "net_proceeds":   round(net, 2),
+                "unrealized_pnl": round(pnl, 2),
+                "pnl_pct":        round(pct, 2),
+                "valuated_at":    valuated_at,
+                # 中文 alias(讓使用者愛用哪套都行)
+                "現價":           round(price, 4),
+                "市值":           round(gross, 2),
+                "淨賣出":         round(net, 2),
+                "未實現損益":     round(pnl, 2),
+                "損益%":          round(pct, 2),
+                "估算時間":       valuated_at,
+            }
+            wb = sheets_writer.upsert_position(**sheet_payload)
+            row["written_to_sheet"] = bool(wb.get("ok"))
+
+        rows.append(row)
+
+    total_pnl     = sum_net - sum_cost
+    total_pnl_pct = (total_pnl / sum_cost * 100) if sum_cost else 0.0
+
+    return _envelope({
+        "ok":            True,
+        "mode":          _client.mode,
+        "valuated_at":   valuated_at,
+        "write_back":    write_back,
+        "fee_rate_used": fee_rate,
+        "fee_min_used":  fee_min,
+        "n_positions":   len(rows),
+        "positions":     rows,
+        "summary": {
+            "total_cost":           round(sum_cost, 2),
+            "total_gross_proceeds": round(sum_gross, 2),
+            "total_sell_fee":       round(sum_fee, 2),
+            "total_sell_tax":       round(sum_tax, 2),
+            "total_net_proceeds":   round(sum_net, 2),
+            "total_unrealized_pnl": round(total_pnl, 2),
+            "total_pnl_pct":        round(total_pnl_pct, 2),
+        },
+        "note": ("未實現損益 = 假設現在全部賣掉、扣完手續費 + 證交稅之後的淨收入 - 你的總成本。"
+                 "結果已寫回 Sheet「股票部位」分頁(只更新存在的欄位)。" if write_back
+                 else "未實現損益 = ...(略)。本次未寫回 Sheet。"),
+    })
+
+
+@tool(
     "ping_sheets_writer",
     "測試 Apps Script Web App 是否能正常呼叫。回傳 {ok: true, pong: 時間戳} 代表通了。"
     "用來 debug SHEETS_WRITER_URL 設定。",
@@ -1043,6 +1218,7 @@ ALL_TOOLS = [
     rebuild_funds_from_trades,
     backfill_position_names,
     backfill_fund_names,
+    valuate_portfolio,
     ping_sheets_writer,
     get_us_quote,
     get_us_candles,
