@@ -50,6 +50,43 @@ def _envelope(data: Any) -> dict:
     return {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False, default=str)}]}
 
 
+# ---------- 名字自動帶入 helpers(使用者只填代號時兜底) ----------
+
+def _lookup_stock_name(symbol: str) -> str:
+    """從內建熱門表 + Fugle tickers 查股票名稱,零外部呼叫的快查。"""
+    if not symbol:
+        return ""
+    try:
+        hits = symbol_lookup.search(symbol, fugle_client=_client, limit=5)
+    except Exception:
+        return ""
+    # 精準符合代號優先
+    for h in hits:
+        if str(h.get("symbol")) == str(symbol):
+            return h.get("name") or ""
+    # 沒精準就拿第一筆當兜底(極少觸發,因為代號是 unique key)
+    return hits[0].get("name", "") if hits else ""
+
+
+_FUND_NAME_CACHE: dict[str, str] = {}
+
+
+def _lookup_fund_name(fund_id: str) -> str:
+    """從 cnyes 抓名字,只 best-effort,失敗回空字串。
+    用 in-process 快取,同個 fund_id 只打一次網路。"""
+    if not fund_id:
+        return ""
+    if fund_id in _FUND_NAME_CACHE:
+        return _FUND_NAME_CACHE[fund_id]
+    try:
+        data = fund_data.fetch_nav(fund_id)
+        name = data.get("name") or ""
+    except Exception:
+        name = ""
+    _FUND_NAME_CACHE[fund_id] = name
+    return name
+
+
 # ---------- quote / snapshot ----------
 
 @tool(
@@ -510,7 +547,7 @@ async def get_fund_nav(args: dict) -> dict:
     "記錄一筆台股買賣到 Google Sheet。**會同時做兩件事**:"
     "(1) 在「股票交易」分頁追加一行;(2) 在「股票部位」分頁加總或扣減該股的部位,"
     "用加權平均成本(WAC)算新 total_cost。SELL 時會回傳已實現損益。"
-    "需要先部署 Apps Script Web App,並把 SHEETS_WRITER_URL 設到 Streamlit Secrets。",
+    "**name 不用填**,系統會自己用 symbol_lookup 查名字補上。",
     {
         "type": "object",
         "properties": {
@@ -523,6 +560,8 @@ async def get_fund_nav(args: dict) -> dict:
                        "description": "手續費(NTD);BUY 會併入 total_cost,SELL 會從成交金額扣"},
             "tax":    {"type": "number",  "default": 0,
                        "description": "證交稅(SELL 才有,通常 = 成交金額 × 0.3%)"},
+            "name":   {"type": "string",
+                       "description": "選填,使用者沒給時系統自己從內建表查"},
             "notes":  {"type": "string"},
         },
         "required": ["date", "symbol", "action", "shares", "price"],
@@ -537,10 +576,13 @@ async def log_stock_trade(args: dict) -> dict:
     fees    = float(args.get("fees") or 0)
     tax     = float(args.get("tax") or 0)
     notes   = str(args.get("notes") or "")
+    name_in = str(args.get("name") or "").strip()  # 使用者顯式給的名字(罕見)
 
-    # 1) 寫入「股票交易」
+    # 1) 寫入「股票交易」— 把 name 也帶過去(若 sheet 沒這欄就自動忽略)
+    auto_name = name_in or _lookup_stock_name(symbol)
     log_result = sheets_writer.add_trade(
-        date=date, symbol=symbol, action=action, shares=shares,
+        date=date, symbol=symbol, name=auto_name,
+        action=action, shares=shares,
         price=price, fees=fees + tax, notes=notes,
     )
     if not log_result.get("ok"):
@@ -571,7 +613,7 @@ async def log_stock_trade(args: dict) -> dict:
 
         upd = sheets_writer.upsert_position(
             symbol=symbol,
-            name=(existing or {}).get("name", "") or args.get("name", ""),
+            name=(existing or {}).get("name") or auto_name,
             shares=new_shares,
             total_cost=round(new_total_cost, 2),
             last_updated=date,
@@ -582,6 +624,7 @@ async def log_stock_trade(args: dict) -> dict:
             "action": "BUY",
             "trade_logged": True,
             "position_updated": upd.get("ok"),
+            "name_used": (existing or {}).get("name") or auto_name,
             "new_shares": new_shares,
             "new_total_cost": round(new_total_cost, 2),
             "new_cost_per_share": round(new_total_cost / new_shares, 4) if new_shares else 0,
@@ -613,7 +656,7 @@ async def log_stock_trade(args: dict) -> dict:
 
     upd = sheets_writer.upsert_position(
         symbol=symbol,
-        name=existing.get("name", ""),
+        name=existing.get("name") or auto_name,
         shares=new_shares,
         total_cost=round(new_total_cost, 2),
         last_updated=date,
@@ -637,7 +680,8 @@ async def log_stock_trade(args: dict) -> dict:
     "log_fund_trade",
     "記錄一筆基金的買進或贖回,**會同時做兩件事**:"
     "(1) 在「基金交易」分頁追加一行;(2) 在「基金部位」分頁加總或扣減該基金。"
-    "用加權平均成本。BUY 加單位、SELL 扣單位並回傳已實現損益。",
+    "用加權平均成本。BUY 加單位、SELL 扣單位並回傳已實現損益。"
+    "**name 不用填**,系統會自己從 cnyes 查名字補上(best-effort)。",
     {
         "type": "object",
         "properties": {
@@ -648,6 +692,7 @@ async def log_stock_trade(args: dict) -> dict:
             "nav":     {"type": "number",  "minimum": 0,
                         "description": "成交當下的單位淨值(NTD)"},
             "fees":    {"type": "number",  "default": 0},
+            "name":    {"type": "string",  "description": "選填,系統會自己抓"},
             "notes":   {"type": "string"},
         },
         "required": ["date", "fund_id", "action", "units", "nav"],
@@ -661,10 +706,14 @@ async def log_fund_trade(args: dict) -> dict:
     nav     = float(args["nav"])
     fees    = float(args.get("fees") or 0)
     notes   = str(args.get("notes") or "")
+    name_in = str(args.get("name") or "").strip()
 
-    # 1) 先寫入「基金交易」
+    # 自動補基金名(cnyes 抓,失敗就空字串)
+    auto_name = name_in or _lookup_fund_name(fid)
+
+    # 1) 先寫入「基金交易」— 連 name 一起帶
     log_result = sheets_writer.add_fund_trade(
-        date=date, fund_id=fid, action=action,
+        date=date, fund_id=fid, name=auto_name, action=action,
         units=units, nav=nav, fees=fees, notes=notes,
     )
     if not log_result.get("ok"):
@@ -688,7 +737,7 @@ async def log_fund_trade(args: dict) -> dict:
 
         upd = sheets_writer.upsert_fund(
             fund_id=fid,
-            name=(existing or {}).get("name", "") or args.get("name", ""),
+            name=(existing or {}).get("name") or auto_name,
             units=new_units,
             total_cost=round(new_total_cost, 2),
             last_updated=date,
@@ -696,6 +745,7 @@ async def log_fund_trade(args: dict) -> dict:
         )
         return _envelope({
             "ok": True, "action": "BUY", "fund_updated": upd.get("ok"),
+            "name_used": (existing or {}).get("name") or auto_name,
             "new_units": new_units,
             "new_total_cost": round(new_total_cost, 2),
             "new_cost_per_unit": round(new_total_cost / new_units, 4) if new_units else 0,
@@ -717,7 +767,7 @@ async def log_fund_trade(args: dict) -> dict:
 
     upd = sheets_writer.upsert_fund(
         fund_id=fid,
-        name=existing.get("name", ""),
+        name=existing.get("name") or auto_name,
         units=new_units,
         total_cost=round(new_total_cost, 2),
         last_updated=date,
@@ -778,18 +828,27 @@ async def rebuild_positions_from_trades(args: dict) -> dict:
             row["total_cost"] -= avg * sell_shares
         row["last_date"] = t.get("date", "") or row["last_date"]
 
+    # 預讀目前股票部位,拿到既有 name(若有)當第一手
+    existing_names: dict[str, str] = {}
+    cur_positions = sheets.load_positions()
+    if cur_positions and not (cur_positions[0].get("_error")):
+        existing_names = {p["symbol"]: p.get("name", "") for p in cur_positions}
+
     results = []
     for sym, data in by_sym.items():
         if data["shares"] <= 0:
             results.append({"symbol": sym, "skipped": "shares ≤ 0(全部賣完)"})
             continue
+        # name 優先序:既有 sheet 上有的 → symbol_lookup 查 → 空字串
+        nm = existing_names.get(sym) or _lookup_stock_name(sym)
         upd = sheets_writer.upsert_position(
             symbol=sym,
+            name=nm,
             shares=int(data["shares"]),
             total_cost=round(data["total_cost"], 2),
             last_updated=data["last_date"],
         )
-        results.append({"symbol": sym, "shares": int(data["shares"]),
+        results.append({"symbol": sym, "name": nm, "shares": int(data["shares"]),
                         "total_cost": round(data["total_cost"], 2),
                         "ok": upd.get("ok")})
 
@@ -838,24 +897,126 @@ async def rebuild_funds_from_trades(args: dict) -> dict:
             row["total_cost"] -= avg * sell_units
         row["last_date"] = t.get("date", "") or row["last_date"]
 
+    # 預讀既有基金部位拿 name
+    existing_fnames: dict[str, str] = {}
+    cur_funds = sheets.load_funds()
+    if cur_funds and not (cur_funds[0].get("_error")):
+        existing_fnames = {f["fund_id"]: f.get("name", "") for f in cur_funds}
+
     results = []
     for fid, data in by_id.items():
         if data["units"] <= 0:
             results.append({"fund_id": fid, "skipped": "units ≤ 0"})
             continue
+        # name 優先:既有 → cnyes 查(慢)→ 空
+        nm = existing_fnames.get(fid) or _lookup_fund_name(fid)
         upd = sheets_writer.upsert_fund(
             fund_id=fid,
+            name=nm,
             units=int(data["units"]),
             total_cost=round(data["total_cost"], 2),
             last_updated=data["last_date"],
         )
-        results.append({"fund_id": fid, "units": int(data["units"]),
+        results.append({"fund_id": fid, "name": nm, "units": int(data["units"]),
                         "total_cost": round(data["total_cost"], 2),
                         "ok": upd.get("ok")})
 
     return _envelope({
         "ok": True,
         "rebuilt_count": sum(1 for r in results if r.get("ok")),
+        "details": results,
+    })
+
+
+@tool(
+    "backfill_position_names",
+    "**一次性**幫「股票部位」分頁裡空白的 name 欄補名字。"
+    "讀現有部位 → 對 name 是空的 row 用內建表查名字 → 只更新 name 欄(其他欄位不動)。"
+    "查不到的會跳過(不會亂寫名字)。回傳每檔的處理結果。"
+    "適用情境:使用者過去填部位時沒填名稱,想一鍵回補。",
+    {
+        "type": "object",
+        "properties": {
+            "force": {"type": "boolean", "default": False,
+                      "description": "True = 連已有 name 的也用內建表覆寫(很少需要)"},
+        },
+        "required": [],
+    },
+)
+async def backfill_position_names(args: dict) -> dict:
+    force = bool((args or {}).get("force"))
+    positions = sheets.load_positions()
+    if positions and positions[0].get("_error"):
+        return _envelope({"error": positions[0]["_error"]})
+
+    results = []
+    filled = 0
+    for p in positions:
+        sym = p.get("symbol", "")
+        cur_name = (p.get("name") or "").strip()
+        if cur_name and not force:
+            results.append({"symbol": sym, "name": cur_name, "skipped": "已有 name"})
+            continue
+        new_name = _lookup_stock_name(sym)
+        if not new_name:
+            results.append({"symbol": sym, "skipped": "內建表查不到"})
+            continue
+        upd = sheets_writer.upsert_position(symbol=sym, name=new_name)
+        if upd.get("ok"):
+            filled += 1
+            results.append({"symbol": sym, "name_filled": new_name})
+        else:
+            results.append({"symbol": sym, "error": upd.get("error")})
+
+    return _envelope({
+        "ok": True,
+        "filled_count": filled,
+        "total_positions": len(positions),
+        "details": results,
+    })
+
+
+@tool(
+    "backfill_fund_names",
+    "**一次性**幫「基金部位」分頁裡空白的 name 欄補名字(從 cnyes 鉅亨網抓)。"
+    "best-effort — cnyes 可能抓不到的就跳過。其他欄位不動。",
+    {
+        "type": "object",
+        "properties": {
+            "force": {"type": "boolean", "default": False},
+        },
+        "required": [],
+    },
+)
+async def backfill_fund_names(args: dict) -> dict:
+    force = bool((args or {}).get("force"))
+    funds = sheets.load_funds()
+    if funds and funds[0].get("_error"):
+        return _envelope({"error": funds[0]["_error"]})
+
+    results = []
+    filled = 0
+    for f in funds:
+        fid = f.get("fund_id", "")
+        cur_name = (f.get("name") or "").strip()
+        if cur_name and not force:
+            results.append({"fund_id": fid, "name": cur_name, "skipped": "已有 name"})
+            continue
+        new_name = _lookup_fund_name(fid)
+        if not new_name:
+            results.append({"fund_id": fid, "skipped": "cnyes 抓不到名字"})
+            continue
+        upd = sheets_writer.upsert_fund(fund_id=fid, name=new_name)
+        if upd.get("ok"):
+            filled += 1
+            results.append({"fund_id": fid, "name_filled": new_name})
+        else:
+            results.append({"fund_id": fid, "error": upd.get("error")})
+
+    return _envelope({
+        "ok": True,
+        "filled_count": filled,
+        "total_funds": len(funds),
         "details": results,
     })
 
@@ -880,6 +1041,8 @@ ALL_TOOLS = [
     log_fund_trade,
     rebuild_positions_from_trades,
     rebuild_funds_from_trades,
+    backfill_position_names,
+    backfill_fund_names,
     ping_sheets_writer,
     get_us_quote,
     get_us_candles,

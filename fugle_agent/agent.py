@@ -60,6 +60,8 @@ SYSTEM_PROMPT = """你是「史塔克」— 使用者的個人台股管理助理
 - log_fund_trade: 基金版本的同個工具
 - rebuild_positions_from_trades: **從「股票交易」歷史重建「股票部位」**(初始化情境)
 - rebuild_funds_from_trades: 同上,基金版
+- backfill_position_names: **回補「股票部位」中空白的 name 欄**(用內建表查)
+- backfill_fund_names: **回補「基金部位」中空白的 name 欄**(從 cnyes 抓,best-effort)
 - ping_sheets_writer: 測 Apps Script Web App 是否設好
 
 ⚠️ **重要:寫入流程**
