@@ -1066,6 +1066,18 @@ async def valuate_portfolio(args: dict) -> dict:
     if positions and positions[0].get("_error"):
         return _envelope({"error": positions[0]["_error"]})
 
+    # 預先讀使用者實際的 sheet headers,看「市值 / 估算時間…」這些欄位到底有沒有加
+    valuation_headers_en = {"current_price", "market_value", "net_proceeds",
+                            "unrealized_pnl", "pnl_pct", "valuated_at"}
+    valuation_headers_zh = {"現價", "市值", "淨賣出", "未實現損益", "損益%", "估算時間"}
+    sheet_headers: set[str] = set()
+    if write_back:
+        tab_name = os.getenv(sheets.POSITIONS_TAB_ENV, sheets.DEFAULT_POSITIONS_TAB)
+        raw = sheets.fetch_tab(tab_name)
+        if raw and not raw[0].get("_error"):
+            sheet_headers = set(raw[0].keys())
+    matched_val_headers = (valuation_headers_en | valuation_headers_zh) & sheet_headers
+
     rows: list[dict] = []
     sum_cost = sum_gross = sum_fee = sum_tax = sum_net = 0.0
 
@@ -1172,6 +1184,21 @@ async def valuate_portfolio(args: dict) -> dict:
     total_pnl     = sum_net - sum_cost
     total_pnl_pct = (total_pnl / sum_cost * 100) if sum_cost else 0.0
 
+    # 診斷:write_back=True 但 sheet 上 0 個目標欄位 → 寫出去也不會被填,要主動警告
+    write_warning = None
+    if write_back:
+        if not sheet_headers:
+            write_warning = ("讀不到「股票部位」的欄位列;可能 PORTFOLIO_SHEET_URL 沒設或"
+                             "分頁名稱對不上,寫回會被 Apps Script 拒絕。")
+        elif not matched_val_headers:
+            write_warning = (
+                "你的「股票部位」分頁**還沒加任何估值欄位**,所以剛才送的數字"
+                "全部被 Apps Script 忽略(不會壞、但也不會填)。"
+                "請到 Sheet 加至少一欄,英文版任選: "
+                "current_price / market_value / net_proceeds / unrealized_pnl / pnl_pct / valuated_at;"
+                "或中文版任選: 現價 / 市值 / 淨賣出 / 未實現損益 / 損益% / 估算時間。"
+            )
+
     return _envelope({
         "ok":            True,
         "mode":          _client.mode,
@@ -1190,9 +1217,16 @@ async def valuate_portfolio(args: dict) -> dict:
             "total_unrealized_pnl": round(total_pnl, 2),
             "total_pnl_pct":        round(total_pnl_pct, 2),
         },
+        "sheet_diagnostics": {
+            "sheet_headers_found":   sorted(sheet_headers),
+            "matched_val_headers":   sorted(matched_val_headers),
+            "missing_val_headers":   sorted((valuation_headers_en | valuation_headers_zh) - sheet_headers),
+            "warning":               write_warning,
+        },
         "note": ("未實現損益 = 假設現在全部賣掉、扣完手續費 + 證交稅之後的淨收入 - 你的總成本。"
-                 "結果已寫回 Sheet「股票部位」分頁(只更新存在的欄位)。" if write_back
-                 else "未實現損益 = ...(略)。本次未寫回 Sheet。"),
+                 "結果已嘗試寫回 Sheet「股票部位」分頁(請看 sheet_diagnostics 確認哪些欄位匹配到了)。"
+                 if write_back else
+                 "未實現損益 = ...(略)。本次未寫回 Sheet(write_back=false)。"),
     })
 
 
