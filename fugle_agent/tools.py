@@ -670,9 +670,18 @@ async def log_stock_trade(args: dict) -> dict:
         last_updated=date,
         notes=existing.get("notes", ""),
     )
+
+    # 把這筆 SELL 的 realized_pnl 寫回「股票交易」剛剛新增的那一列
+    realized_writeback = sheets_writer.update_trade_realized(
+        date=date, symbol=symbol, action="SELL", shares=shares,
+        realized_pnl=round(realized_pnl, 2),
+    )
+
     return _envelope({
         "ok": True,
         "action": "SELL",
+        "realized_pnl_written_to_trade_row": bool(realized_writeback.get("ok")),
+        "realized_pnl_write_error": realized_writeback.get("error"),
         "trade_logged": True,
         "position_updated": upd.get("ok"),
         "remaining_shares": new_shares,
@@ -1445,6 +1454,167 @@ async def sync_portfolio_from_trades(args: dict) -> dict:
 
 
 @tool(
+    "get_realized_pnl",
+    "**掃整份「股票交易」紀錄,算出每筆 SELL 的已實現損益(實際賺/賠多少錢)**。"
+    "用加權平均成本法(跟玉山 e Trader 庫存顯示的「平均成本」一致):"
+    "依日期排序,BUY 加股數+成本,SELL 用當下的平均成本扣減。"
+    "回傳:總已實現損益、勝率、每檔加總、每筆 SELL 的細節。"
+    "**支援 write_back=true 把每筆 SELL 的 realized_pnl 寫回「股票交易」對應 row**"
+    "(需要「股票交易」分頁有 realized_pnl 或 已實現損益 欄位)。"
+    "適用情境:使用者問「我交易賺多少」「已實現損益」「過去賣掉賺了多少」「我的勝率」「幫我把每筆 SELL 的賺賠記到 Sheet」。",
+    {
+        "type": "object",
+        "properties": {
+            "from_date":  {"type": "string", "description": "選填,只算這個日期之後的 SELL"},
+            "to_date":    {"type": "string", "description": "選填,只算這個日期之前的 SELL"},
+            "symbol":     {"type": "string", "description": "選填,只算單一代號"},
+            "write_back": {"type": "boolean", "default": False,
+                           "description": "True = 把每筆 SELL 的 realized_pnl 寫回「股票交易」對應 row"},
+        },
+        "required": [],
+    },
+)
+async def get_realized_pnl(args: dict) -> dict:
+    from_date  = str((args or {}).get("from_date") or "").strip()
+    to_date    = str((args or {}).get("to_date")   or "").strip()
+    sym_filter = str((args or {}).get("symbol")    or "").strip()
+    write_back = bool((args or {}).get("write_back", False))
+
+    trades = sheets.load_trades()
+    if trades and trades[0].get("_error"):
+        return _envelope({"error": trades[0]["_error"]})
+
+    # 依日期排序(SELL 才能正確 reference 當下的加權平均成本)
+    trades_sorted = sorted(trades, key=lambda t: str(t.get("date") or ""))
+
+    by_sym: dict[str, dict] = {}     # 跑加權平均的中間狀態
+    events: list[dict] = []          # 每筆 SELL 的紀錄
+
+    for t in trades_sorted:
+        sym = str(t.get("symbol", "")).strip()
+        if not sym:
+            continue
+        date_str = str(t.get("date") or "")
+        action = (t.get("action") or "").upper().strip()
+        sh = int(t.get("shares") or 0)
+        pr = float(t.get("price") or 0)
+        fe = float(t.get("fees")  or 0)  # 注意:這欄是 手續費 + 證交稅 加總
+        tc = float(t.get("total_cost") or 0)
+
+        if sym not in by_sym:
+            by_sym[sym] = {"shares": 0, "total_cost": 0.0}
+        st = by_sym[sym]
+
+        if action == "BUY":
+            cost_added = tc if tc > 0 else (sh * pr + fe)
+            st["shares"]     += sh
+            st["total_cost"] += cost_added
+        elif action == "SELL" and st["shares"] > 0:
+            avg = st["total_cost"] / st["shares"] if st["shares"] else 0
+            sell_shares  = min(sh, st["shares"])
+            cost_of_sold = avg * sell_shares
+            # 淨收入:有填 total_cost 就直接用,沒填就 price×shares - fees(已含稅)
+            proceeds = tc if tc > 0 else (sh * pr - fe)
+            realized = proceeds - cost_of_sold
+            pct      = (realized / cost_of_sold * 100) if cost_of_sold else 0.0
+
+            # 過濾(日期區間 + 代號)
+            ok_date = ((not from_date or date_str >= from_date)
+                       and (not to_date or date_str <= to_date))
+            ok_sym  = (not sym_filter or sym == sym_filter)
+            if ok_date and ok_sym:
+                events.append({
+                    "date":             date_str,
+                    "symbol":           sym,
+                    "name":             _lookup_stock_name(sym),
+                    "shares_sold":      sell_shares,
+                    "sell_price":       round(pr, 4),
+                    "avg_cost_at_sale": round(avg, 4),
+                    "cost_of_sold":     round(cost_of_sold, 2),
+                    "fees_and_tax":     round(fe, 2),
+                    "proceeds_net":     round(proceeds, 2),
+                    "realized_pnl":     round(realized, 2),
+                    "realized_pct":     round(pct, 2),
+                })
+
+            # 不管在不在過濾範圍內,都要更新狀態(SELL 的扣減是累積的)
+            st["shares"]     -= sell_shares
+            st["total_cost"] -= cost_of_sold
+
+    # 加總
+    n_sells       = len(events)
+    total_real    = sum(e["realized_pnl"] for e in events)
+    wins          = sum(1 for e in events if e["realized_pnl"] > 0)
+    losses        = sum(1 for e in events if e["realized_pnl"] < 0)
+    flat          = n_sells - wins - losses
+    win_rate      = (wins / n_sells * 100) if n_sells else 0.0
+
+    # 每檔加總
+    by_sym_real: dict[str, dict] = {}
+    for e in events:
+        s = e["symbol"]
+        if s not in by_sym_real:
+            by_sym_real[s] = {"symbol": s, "name": e["name"],
+                              "total_realized": 0.0, "n_sells": 0}
+        by_sym_real[s]["total_realized"] += e["realized_pnl"]
+        by_sym_real[s]["n_sells"]        += 1
+    by_sym_list = sorted(
+        ({"symbol": v["symbol"], "name": v["name"],
+          "total_realized": round(v["total_realized"], 2),
+          "n_sells": v["n_sells"]}
+         for v in by_sym_real.values()),
+        key=lambda x: -x["total_realized"],
+    )
+
+    # 寫回 — 對每筆 SELL 嘗試把 realized_pnl 填到「股票交易」對應 row
+    write_results: list[dict] = []
+    if write_back and events:
+        for e in events:
+            res = sheets_writer.update_trade_realized(
+                date=e["date"], symbol=e["symbol"], action="SELL",
+                shares=e["shares_sold"],
+                realized_pnl=e["realized_pnl"],
+            )
+            write_results.append({
+                "date": e["date"], "symbol": e["symbol"], "shares": e["shares_sold"],
+                "realized_pnl": e["realized_pnl"],
+                "ok": bool(res.get("ok")),
+                "error": res.get("error"),
+            })
+
+    write_summary = None
+    if write_back:
+        wins_write = sum(1 for r in write_results if r["ok"])
+        write_summary = {
+            "attempted":  len(write_results),
+            "succeeded":  wins_write,
+            "failed":     len(write_results) - wins_write,
+            "details":    write_results,
+            "hint": ("失敗最常見原因:(1)「股票交易」分頁沒加 realized_pnl 或 已實現損益 欄位 "
+                     "(2) Apps Script 還沒重新部署最新版 "
+                     "(3) date / symbol / shares 跟 Sheet 上的不完全一致。"),
+        }
+
+    return _envelope({
+        "ok":                 True,
+        "filter_from":        from_date or None,
+        "filter_to":          to_date or None,
+        "filter_symbol":      sym_filter or None,
+        "n_sells":            n_sells,
+        "total_realized_pnl": round(total_real, 2),
+        "win_count":          wins,
+        "loss_count":         losses,
+        "flat_count":         flat,
+        "win_rate_pct":       round(win_rate, 2),
+        "by_symbol":          by_sym_list,
+        "events":             events,
+        "write_back":         write_summary,
+        "note": ("已實現損益 = 賣出淨收 - 當下加權平均成本 × 賣出股數。"
+                 "費用欄已含手續費 + 證交稅。整體勝率 = 賺錢的 SELL 筆數 / 總 SELL 筆數。"),
+    })
+
+
+@tool(
     "ping_sheets_writer",
     "測試 Apps Script Web App 是否能正常呼叫。回傳 {ok: true, pong: 時間戳} 代表通了。"
     "用來 debug SHEETS_WRITER_URL 設定。",
@@ -1468,6 +1638,7 @@ ALL_TOOLS = [
     backfill_fund_names,
     valuate_portfolio,
     sync_portfolio_from_trades,
+    get_realized_pnl,
     ping_sheets_writer,
     get_us_quote,
     get_us_candles,

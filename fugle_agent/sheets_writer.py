@@ -82,3 +82,9 @@ def upsert_fund(**fields) -> dict:
 
 def delete_fund(fund_id: str) -> dict:
     return _post("delete_fund", {"fund_id": fund_id})
+
+
+def update_trade_realized(**fields) -> dict:
+    """把單筆 SELL 的 realized_pnl 寫回「股票交易」對應的 row。
+    必要欄位:date, symbol, action, shares, realized_pnl"""
+    return _post("update_trade_realized", fields)
