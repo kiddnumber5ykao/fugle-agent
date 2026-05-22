@@ -332,6 +332,42 @@ def _compact_old_tool_results(history: list, *, keep_recent_turns: int,
     return compacted
 
 
+def _refresh_message_cache_breakpoint(history: list) -> None:
+    """Prompt caching:在 history 最後一條訊息掛 cache_control,清掉舊的。
+
+    這樣 Anthropic 會把 [system + tools + 所有舊 messages] 整段當作快取前綴,
+    後續呼叫只要前綴一致就命中快取,cached tokens 算 10% 費率 + 不太吃 rate limit 配額。
+
+    Anthropic 限制 4 個 cache breakpoints / 請求 — 我們已用掉 2(system + tools),
+    這邊再用 1 = 3,留 1 個 buffer。
+    """
+    # 1) 先把所有 messages 裡的 cache_control 清掉
+    for msg in history:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for blk in content:
+                if isinstance(blk, dict) and "cache_control" in blk:
+                    blk.pop("cache_control", None)
+
+    if not history:
+        return
+
+    # 2) 在最後一條訊息的最後一個「可快取」block 上掛 cache_control
+    last_msg = history[-1]
+    content = last_msg.get("content")
+    if isinstance(content, list) and content:
+        for blk in reversed(content):
+            if isinstance(blk, dict) and blk.get("type") in ("text", "tool_use", "tool_result"):
+                blk["cache_control"] = {"type": "ephemeral"}
+                return
+    elif isinstance(content, str):
+        # 字串 content 改成 list block 格式,才能掛 cache_control
+        last_msg["content"] = [{
+            "type": "text", "text": content,
+            "cache_control": {"type": "ephemeral"},
+        }]
+
+
 def _trim_history_inplace(history: list, *, max_messages: int) -> int:
     """Drop oldest messages to keep history within ``max_messages``.
 
@@ -408,6 +444,8 @@ async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[di
     history.append({"role": "user", "content": user_input})
 
     for _step in range(MAX_STEPS):
+        # 在最後一條訊息掛 cache_control,讓 Anthropic 把整段歷史也納入快取前綴
+        _refresh_message_cache_breakpoint(history)
         response = await client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
