@@ -31,9 +31,9 @@ MAX_TOKENS = int(os.getenv("ANTHROPIC_MAX_TOKENS", "4096"))
 # Sliding window: keep at most this many recent messages in the LLM context.
 # Older ones get *compacted* first(tool_result 大塊 JSON 換成短 stub),
 # 只有再超出才會真的丟掉,讓上下文記憶比舊版深 2-3 倍。
-MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "60"))
+MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "40"))
 # 最近 N 個「新 user 訊息」的 tool_result 保留完整,更舊的會被 compact。
-COMPACT_KEEP_RECENT_TURNS = int(os.getenv("COMPACT_KEEP_RECENT_TURNS", "6"))
+COMPACT_KEEP_RECENT_TURNS = int(os.getenv("COMPACT_KEEP_RECENT_TURNS", "4"))
 # Anthropic SDK 預設 60s 容易在 web_search 多跳時超時,拉長 + 加重試。
 ANTHROPIC_TIMEOUT = float(os.getenv("ANTHROPIC_TIMEOUT", "300"))
 ANTHROPIC_MAX_RETRIES = int(os.getenv("ANTHROPIC_MAX_RETRIES", "2"))
@@ -150,20 +150,23 @@ SYSTEM_PROMPT = """你是「史塔克」— 使用者的個人台股管理助理
 你目前運行於 {mode} 模式 — mock 模式下的市場資料是隨機生成的,僅供示範,
 請在開頭明確提醒「以下為 mock 假資料」。Live 模式 (📡) 才是真實 Fugle 行情。
 
-== 時間 ==
-**現在時間:{current_time}**
+== 時間規則 ==
 - 台股盤中:週一至週五 09:00 – 13:30(台北時間)
 - 台股盤後 / 週末 / 國定假日:Fugle 報價會是「上個交易日的收盤價」
 - 美股盤中(換算台北時間):
   - 夏令時間(3 月~11 月初):週一至週五 21:30 – 翌日 04:00
   - 冬令時間(11 月初~3 月):週一至週五 22:30 – 翌日 05:00
-- 看到「今天」「現在」「最近」等詞,**用上面那個時間判斷**,不要憑想像
+- 看到「今天」「現在」「最近」等詞,**用下方「即時時間」訊息判斷**,不要憑想像
 
 == 使用者個人設定 ==
 {user_context}
 
 開場時不用自我介紹,直接幫忙就好。
 """
+
+
+# 動態時間塊 — 每次呼叫重算,不會被 cache(只佔幾十個 token)
+SYSTEM_PROMPT_TIME_BLOCK = "== 即時時間 ==\n**現在時間:{current_time}**"
 
 
 def _user_context() -> str:
@@ -210,22 +213,30 @@ WEB_SEARCH_MAX_USES = int(os.getenv("WEB_SEARCH_MAX_USES", "5"))
 
 
 def _anthropic_tool_specs() -> list[dict]:
-    """Custom (client-side) tools + Anthropic-managed server tools (web_search)."""
-    specs: list[dict] = [
-        {
-            "name": t.name,
-            "description": t.description,
-            "input_schema": t.input_schema,
-        }
-        for t in ALL_TOOLS
-    ]
-    # Anthropic-managed server tool: web search.  Claude can browse the web on
-    # its own and get results back without us writing any handler.
+    """Custom (client-side) tools + Anthropic-managed server tools (web_search).
+
+    Server tool 放前面、custom tools 放後面,並在「最後一個 custom tool」掛
+    cache_control,讓 Anthropic 把整份工具定義(連同前面的 system prompt)
+    快取起來,後續呼叫付 10% 費率。
+    """
+    specs: list[dict] = []
+    # 1) 先放 server tool(每次都要新鮮,放前面也可以 — 反正它在 cache_control 之前)
     specs.append({
         "type": "web_search_20250305",
         "name": "web_search",
         "max_uses": WEB_SEARCH_MAX_USES,
     })
+    # 2) 接著所有 custom tools
+    for i, t in enumerate(ALL_TOOLS):
+        entry = {
+            "name": t.name,
+            "description": t.description,
+            "input_schema": t.input_schema,
+        }
+        # 最後一個 custom tool 加 cache_control — 會 cache 上方整份工具定義
+        if i == len(ALL_TOOLS) - 1:
+            entry["cache_control"] = {"type": "ephemeral"}
+        specs.append(entry)
     return specs
 
 
@@ -265,7 +276,7 @@ def _blocks_to_dicts(blocks) -> list[dict]:
 
 
 def _compact_old_tool_results(history: list, *, keep_recent_turns: int,
-                              stub_max_chars: int = 400) -> int:
+                              stub_max_chars: int = 250) -> int:
     """把舊訊息裡的 tool_result 大塊內容換成短 stub,只保留前 ``stub_max_chars`` 字。
 
     為什麼這樣做:工具結果(尤其 get_my_portfolio / get_candles / web_search)
@@ -371,11 +382,19 @@ async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[di
     )
     tools = _anthropic_tool_specs()
     mode_str = "mock" if SETTINGS.mock else "live"
-    system_text = SYSTEM_PROMPT.format(
+
+    # System prompt 分成兩塊:穩定的(掛 cache_control 給 Anthropic 快取)
+    # + 動態時間(每次不同,不快取,只佔幾十 token)。
+    # Haiku 4.5 快取 5 分鐘 TTL,後續呼叫 cached 部分付 10% 費率,有效配額 ×5。
+    system_stable = SYSTEM_PROMPT.format(
         mode=mode_str,
         user_context=_user_context(),
-        current_time=_now_tw(),
     )
+    system_dynamic = SYSTEM_PROMPT_TIME_BLOCK.format(current_time=_now_tw())
+    system_blocks: list[dict] = [
+        {"type": "text", "text": system_stable, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": system_dynamic},
+    ]
 
     # 兩段式縮減上下文:
     # (1) Compact 舊工具結果(留前 400 字 stub) — 大幅省 token,對話脈絡保留
@@ -392,7 +411,7 @@ async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[di
         response = await client.messages.create(
             model=MODEL,
             max_tokens=MAX_TOKENS,
-            system=system_text,
+            system=system_blocks,
             tools=tools,
             messages=history,
         )
