@@ -206,6 +206,12 @@ def _consume_turn(prompt: str, text_box, tool_log):
                         parts.append(f"丟掉 {event['dropped']} 則最舊訊息")
                     if parts:
                         st.caption("♻️ " + "、".join(parts) + "(省 token)")
+            elif kind == "history_repaired":
+                with tool_log:
+                    st.caption(
+                        f"🩹 偵測到 {event['fixed']} 筆中斷的工具請求,已自動補上 "
+                        "placeholder 讓對話繼續(這些工具的結果遺失,需要再問一次)"
+                    )
             elif kind == "max_steps_reached":
                 text_buffer[0] += f"\n\n_(達到最大 {event['steps']} 步,中止)_"
                 text_box.markdown(text_buffer[0])
