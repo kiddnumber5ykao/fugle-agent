@@ -212,6 +212,12 @@ def _consume_turn(prompt: str, text_box, tool_log):
                         f"🩹 偵測到 {event['fixed']} 筆中斷的工具請求,已自動補上 "
                         "placeholder 讓對話繼續(這些工具的結果遺失,需要再問一次)"
                     )
+            elif kind == "max_tokens_truncated":
+                with tool_log:
+                    st.warning(
+                        f"⚠️ 回應被 max_tokens 截斷(目前上限 {event['current_max']} tokens)。"
+                        "到 Streamlit Secrets 把 `ANTHROPIC_MAX_TOKENS` 調高(建議 4096 或 8192)。"
+                    )
             elif kind == "max_steps_reached":
                 text_buffer[0] += f"\n\n_(達到最大 {event['steps']} 步,中止)_"
                 text_box.markdown(text_buffer[0])
