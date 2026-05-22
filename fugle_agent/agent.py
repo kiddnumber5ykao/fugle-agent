@@ -332,6 +332,78 @@ def _compact_old_tool_results(history: list, *, keep_recent_turns: int,
     return compacted
 
 
+def _fix_orphaned_tool_uses(history: list) -> int:
+    """偵測 + 自動修補 orphan tool_use blocks。
+
+    Anthropic 規定:assistant 訊息裡的每個 tool_use 都必須在「下一條 user 訊息」
+    有對應的 tool_result。但如果之前某次呼叫被中斷(rate limit、瀏覽器 reload、
+    Streamlit cancel…)會留下沒有 tool_result 的 orphan,讓後續所有對話 400。
+
+    這個函數補 placeholder tool_result(is_error=True),把結構修回合法。
+    Returns: 補了幾個 placeholder。
+    """
+    fixes = 0
+    i = 0
+    while i < len(history):
+        msg = history[i]
+        if msg.get("role") != "assistant":
+            i += 1
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list):
+            i += 1
+            continue
+
+        # client-side tool_use IDs(server_tool_use 不算 — 它的結果是內嵌的)
+        tool_use_ids = [
+            blk.get("id") for blk in content
+            if isinstance(blk, dict) and blk.get("type") == "tool_use"
+        ]
+        if not tool_use_ids:
+            i += 1
+            continue
+
+        # 看下一條訊息有沒有對應的 tool_result
+        next_msg = history[i + 1] if i + 1 < len(history) else None
+        existing_result_ids: set = set()
+        if next_msg and next_msg.get("role") == "user":
+            next_content = next_msg.get("content")
+            if isinstance(next_content, list):
+                for blk in next_content:
+                    if isinstance(blk, dict) and blk.get("type") == "tool_result":
+                        existing_result_ids.add(blk.get("tool_use_id"))
+
+        missing_ids = [tid for tid in tool_use_ids if tid not in existing_result_ids]
+        if not missing_ids:
+            i += 1
+            continue
+
+        placeholders = [{
+            "type": "tool_result",
+            "tool_use_id": tid,
+            "content": "(之前的工具請求中斷,結果遺失。需要的話請使用者再問一次。)",
+            "is_error": True,
+        } for tid in missing_ids]
+
+        if next_msg and next_msg.get("role") == "user":
+            # 把 placeholder 接到既有 user 訊息前面(tool_result 必須在 user msg 開頭)
+            existing = next_msg.get("content")
+            if isinstance(existing, list):
+                next_msg["content"] = placeholders + existing
+            else:
+                next_msg["content"] = placeholders + [
+                    {"type": "text", "text": str(existing)}
+                ]
+        else:
+            # 沒有下一條 user msg,直接插一個
+            history.insert(i + 1, {"role": "user", "content": placeholders})
+
+        fixes += len(placeholders)
+        i += 1
+
+    return fixes
+
+
 def _refresh_message_cache_breakpoint(history: list) -> None:
     """Prompt caching:在 history 最後一條訊息掛 cache_control,清掉舊的。
 
@@ -442,6 +514,12 @@ async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[di
         yield {"type": "history_trimmed", "dropped": dropped, "compacted": compacted}
 
     history.append({"role": "user", "content": user_input})
+
+    # 防禦:之前某次對話可能在 tool_use → tool_result 之間被中斷,留下 orphan。
+    # 補 placeholder 結果讓結構合法,避免後續所有對話 400。
+    fixed = _fix_orphaned_tool_uses(history)
+    if fixed:
+        yield {"type": "history_repaired", "fixed": fixed}
 
     for _step in range(MAX_STEPS):
         # 在最後一條訊息掛 cache_control,讓 Anthropic 把整段歷史也納入快取前綴
