@@ -564,6 +564,10 @@ async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[di
         # Persist this assistant turn (text + any tool_use blocks) to history
         history.append({"role": "assistant", "content": _blocks_to_dicts(response.content)})
 
+        # 偵測被 max_tokens 截斷 — UI 會顯示警告教使用者調高
+        if response.stop_reason == "max_tokens":
+            yield {"type": "max_tokens_truncated", "current_max": MAX_TOKENS}
+
         # No more tool calls → conversation turn done.
         if response.stop_reason != "tool_use" or not tool_uses:
             return
