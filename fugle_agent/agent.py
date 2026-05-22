@@ -36,7 +36,7 @@ MAX_HISTORY_MESSAGES = int(os.getenv("MAX_HISTORY_MESSAGES", "40"))
 COMPACT_KEEP_RECENT_TURNS = int(os.getenv("COMPACT_KEEP_RECENT_TURNS", "4"))
 # Anthropic SDK 預設 60s 容易在 web_search 多跳時超時,拉長 + 加重試。
 ANTHROPIC_TIMEOUT = float(os.getenv("ANTHROPIC_TIMEOUT", "300"))
-ANTHROPIC_MAX_RETRIES = int(os.getenv("ANTHROPIC_MAX_RETRIES", "2"))
+ANTHROPIC_MAX_RETRIES = int(os.getenv("ANTHROPIC_MAX_RETRIES", "4"))
 
 SYSTEM_PROMPT = """你是「史塔克」— 使用者的個人台股管理助理(命名出自 Tony Stark)。
 你的角色是個盡責的私人量化分析師,read-only,絕對不下單。
