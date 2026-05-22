@@ -240,7 +240,35 @@ if prompt:
             full_text, tools_used = _consume_turn(prompt, text_box, tool_log)
             text_box.markdown(full_text)
         except Exception as exc:
-            full_text = f"❌ 出錯了:`{type(exc).__name__}`\n\n```\n{exc}\n```"
+            # 把常見的暫時性錯誤翻成中文,避免使用者看到 traceback 嚇到
+            msg = str(exc)
+            etype = type(exc).__name__
+            if "overloaded_error" in msg or "529" in msg:
+                full_text = (
+                    "🚦 **Anthropic 伺服器暫時忙不過來**(529 Overloaded)。\n\n"
+                    "這是 Anthropic 那邊的事,不是你的設定問題。**等 10-30 秒按 Enter 重送同一題就好**。\n\n"
+                    "高峰時段(美股開盤、Anthropic 發布大新聞)比較常發生。"
+                )
+            elif "rate_limit_error" in msg or "429" in msg:
+                full_text = (
+                    "🚧 **你的 API 配額用太兇了**(429 Rate Limit)。\n\n"
+                    "等 1 分鐘讓配額重置,或考慮:\n"
+                    "- 升 [Anthropic Tier](https://console.anthropic.com/settings/billing)\n"
+                    "- 在 Secrets 把 `ANTHROPIC_MODEL` 改成 `claude-sonnet-4-6`(Sonnet 比 Haiku 聰明、call 數少)\n"
+                    "- 清空對話從頭來"
+                )
+            elif "tool_use" in msg and "tool_result" in msg:
+                full_text = (
+                    "🩹 **對話歷史結構壞了** — 之前某次中斷留下 orphan tool_use。\n\n"
+                    "按左邊 sidebar 的「清除對話」按鈕清掉,從新對話開始。"
+                )
+            elif "timeout" in msg.lower() or "TimeoutError" in etype:
+                full_text = (
+                    "⏱ **Anthropic 回應太慢逾時** — 通常是 web_search 卡住。\n\n"
+                    "重試一次,還是慢的話 Streamlit Secrets 加 `ANTHROPIC_TIMEOUT = \"600\"`。"
+                )
+            else:
+                full_text = f"❌ 出錯了:`{etype}`\n\n```\n{exc}\n```"
             tools_used = []
             text_box.markdown(full_text)
 
