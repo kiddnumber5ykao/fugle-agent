@@ -42,6 +42,7 @@ except Exception:  # pragma: no cover — fallback for unit tests / mock-only us
         return deco
 
 from . import backtest as bt
+from . import etf_holdings
 from . import fund_data
 from . import sheets
 from . import sheets_writer
@@ -528,6 +529,30 @@ async def get_my_funds(args: dict) -> dict:
         "note": "如果某檔 fund 沒有 manual_nav,先呼叫 get_fund_nav 抓即時值;"
                 "如果 get_fund_nav 也失敗,就告訴使用者「需要手動更新 Sheet 上的 NAV」。",
     })
+
+
+@tool(
+    "get_etf_holdings",
+    "**抓台股 ETF 的成分股 + 產業配置**(從 MoneyDJ 理財網爬)。"
+    "支援所有台股 ETF,**包含主動式 ETF(00981A、00982A 那種,cnyes / Fugle 抓不到的)**。"
+    "回傳:資料日期、前 10 大持股(代號 + 名稱 + 權重% + 持有股數)、產業配置(產業 + 金額 + 比例)、source_url。"
+    "使用者問「00981A 持股是什麼」「0050 成分股」「00878 配置」「半導體 ETF 拿了哪些股」→ 用這個。"
+    "前 10 大以外的完整持股 MoneyDJ 主頁不顯示,要看請點 source_url。",
+    {
+        "type": "object",
+        "properties": {
+            "symbol": {"type": "string",
+                       "description": "台股 ETF 代號,如 0050、00878、00981A、006208"},
+        },
+        "required": ["symbol"],
+    },
+)
+async def get_etf_holdings(args: dict) -> dict:
+    sym = str(args.get("symbol") or "").strip()
+    if not sym:
+        return _envelope({"error": "缺少 symbol"})
+    data = etf_holdings.fetch_holdings(sym)
+    return _envelope(data)
 
 
 @tool(
@@ -1643,6 +1668,7 @@ ALL_TOOLS = [
     get_us_quote,
     get_us_candles,
     get_stock_news,
+    get_etf_holdings,
     search_taiwan_symbol,
     get_quote,
     get_candles,

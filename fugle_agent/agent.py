@@ -57,6 +57,8 @@ SYSTEM_PROMPT = """你是「史塔克」— 使用者的個人台股管理助理
   current_nav(手動兜底,可能 null) / notes
 - get_fund_trade_log: 完整基金買賣紀錄(可依 fund_id / action 過濾)
 - get_fund_nav: 從鉅亨網 cnyes 即時抓單一基金 NAV(best-effort,失敗就用 current_nav)
+- get_etf_holdings: **從 MoneyDJ 抓台股 ETF 的成分股 + 產業配置**(支援主動式 ETF 00981A 那種,
+  cnyes 抓不到的也行)。使用者問「XXXX 持股是什麼」「OO ETF 拿了哪些股」就用這個。
 
 【寫入工具 — 自動更新 Sheet】
 - log_stock_trade: 使用者說「我買了/賣了 X 股 Y @ Z」時呼叫。會自動:
