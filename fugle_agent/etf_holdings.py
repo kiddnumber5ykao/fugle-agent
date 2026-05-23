@@ -284,10 +284,16 @@ def fetch_holdings(symbol: str) -> dict:
     candidates = [r for r in [md, wg] if r.get("top_holdings")]
     if not candidates:
         return {
-            "symbol":   sym,
-            "error":    "兩個來源都抓不到 — Streamlit Cloud IP 可能被擋",
-            "attempts": attempts,
-            "fallback_links": [md["source_url"], wg["source_url"]],
+            "symbol":          sym,
+            "error":           "所有爬蟲來源都被擋 — Streamlit Cloud IP 常被金融類網站封殺",
+            "attempts":        attempts,
+            "fallback_links":  [md["source_url"], wg["source_url"]],
+            "try_web_search":  True,
+            "web_search_hint": (
+                f"請用 web_search 查「{sym} 持股 成分股 最新」,"
+                f"從搜尋結果摘要出前 10 大持股 + 比例。"
+                "Anthropic 的 web_search 用他們自己的 IP,不會被擋。"
+            ),
         }
 
     best = max(candidates, key=lambda r: len(r["top_holdings"]))

@@ -57,8 +57,11 @@ SYSTEM_PROMPT = """你是「史塔克」— 使用者的個人台股管理助理
   current_nav(手動兜底,可能 null) / notes
 - get_fund_trade_log: 完整基金買賣紀錄(可依 fund_id / action 過濾)
 - get_fund_nav: 從鉅亨網 cnyes 即時抓單一基金 NAV(best-effort,失敗就用 current_nav)
-- get_etf_holdings: **從 MoneyDJ 抓台股 ETF 的成分股 + 產業配置**(支援主動式 ETF 00981A 那種,
-  cnyes 抓不到的也行)。使用者問「XXXX 持股是什麼」「OO ETF 拿了哪些股」就用這個。
+- get_etf_holdings: **抓台股 ETF 的成分股 + 產業配置**(MoneyDJ → wantgoo 自動 fallback)。
+  使用者問「XXXX 持股是什麼」「OO ETF 拿了哪些股」就用這個。
+  ⚠️ **如果回傳 try_web_search=true(代表兩邊爬蟲都被擋)→ 立刻改用 web_search**
+  查「<代號> 持股 成分股 最新」,從搜尋結果摘要前 10 大持股回答使用者。
+  **絕對不要憑記憶亂報 ETF 名稱或持股** — 名稱要用 search_taiwan_symbol 查,持股要靠工具。
 
 【寫入工具 — 自動更新 Sheet】
 - log_stock_trade: 使用者說「我買了/賣了 X 股 Y @ Z」時呼叫。會自動:
@@ -132,6 +135,9 @@ SYSTEM_PROMPT = """你是「史塔克」— 使用者的個人台股管理助理
 - **看到中文公司名沒給代號**(「台積電」「玉山金」「中信金」「鴻海」…)
   → **必先 search_taiwan_symbol 確認代號** → 再用 get_quote 等工具。
   禁止憑記憶猜代號,常會把「玉山金」打成「玉山銀」、「群益」「群創」也常混。
+- **看到 ETF / 主動式 ETF 代號(00 開頭、字尾可能帶 A)** → 用 get_etf_holdings 抓持股。
+  **如果工具失敗或不確定 ETF 名稱**,先 search_taiwan_symbol 查代號 → 拿到名稱再回答。
+  **絕對禁止憑記憶報主動式 ETF 的發行商**(例如 00981A 是統一還是群益?如果不確定就**查**)。
 - 個股新聞 → get_stock_news(台股要加 .TW)
 - 總體 / 政策 / 「市場現在怎麼了」→ web_search
 
