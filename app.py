@@ -59,30 +59,70 @@ from fugle_agent.config import SETTINGS  # noqa: E402
 # ---------------------------------------------------------------------------
 # Page config
 # ---------------------------------------------------------------------------
+# page_icon 優先用根目錄的 icon.png / icon.jpg(iPhone 主畫面會用這個);
+# 找不到才退回 emoji。
+import os.path as _p
+_ICON_CANDIDATES = ["icon.png", "icon.jpg", "icon.jpeg"]
+_icon_path = next((p for p in _ICON_CANDIDATES if _p.isfile(p)), "📈")
+
 st.set_page_config(
-    page_title="Fugle Agent · 台股研究助理",
-    page_icon="📈",
+    page_title="史塔克 · 我的台股助理",
+    page_icon=_icon_path,
     layout="centered",
     initial_sidebar_state="auto",
 )
 
 
 # ---------------------------------------------------------------------------
-# Lightweight password gate (optional — set APP_PASSWORD in secrets to enable)
+# Password gate with remember-me URL token.
+#
+# 使用者輸對密碼後,我們把 sha256(salt:password)[:16] 塞進 URL 變成 ?auth=XXX。
+# 把那個 URL 加到 iPhone 主畫面 / 瀏覽器書籤,以後直接點 → token 在 URL → 自動登入。
+# 想撤銷所有舊 token?改 Streamlit Secrets 的 APP_PASSWORD,hash 變了就全部失效。
 # ---------------------------------------------------------------------------
+def _expected_token(password: str) -> str:
+    import hashlib
+    return hashlib.sha256(("stark-salt:" + password).encode()).hexdigest()[:16]
+
+
 def _password_gate() -> bool:
     required = os.environ.get("APP_PASSWORD", "").strip()
     if not required:
         return True  # no password configured → open access
-    if st.session_state.get("auth_ok"):
+
+    expected = _expected_token(required)
+
+    # 1) URL 有 ?auth=<token> 且對 → 直接通過(來自主畫面 icon 或書籤)
+    url_token = (st.query_params.get("auth") or "").strip()
+    if url_token == expected:
+        st.session_state.auth_ok = True
         return True
-    st.title("🔒 Fugle Agent")
+
+    # 2) session_state 已標記登入 → 通過,並把 token 補進 URL 讓 reload 也認得
+    if st.session_state.get("auth_ok"):
+        if url_token != expected:
+            st.query_params["auth"] = expected
+        return True
+
+    # 3) 否則顯示密碼框
+    st.title("🔒 史塔克 · 我的台股助理")
     with st.form("auth"):
         pwd = st.text_input("輸入存取密碼", type="password")
         ok = st.form_submit_button("進入")
     if ok:
         if pwd == required:
             st.session_state.auth_ok = True
+            st.query_params["auth"] = expected
+            st.success("✅ 已登入。")
+            st.info(
+                "📌 **想以後不用再輸密碼?** 看一下現在網址列,後面會多 `?auth=...` 一串。"
+                "**把這個含 token 的網址加到 iPhone 主畫面 / 瀏覽器書籤** — "
+                "下次點開就直接進來,不會再要求密碼。"
+            )
+            st.markdown(
+                "如果要強制讓所有舊 token 失效(例如不小心把網址貼給別人),"
+                "到 Streamlit Secrets 改 `APP_PASSWORD` 就好。"
+            )
             st.rerun()
         else:
             st.error("密碼錯誤")
@@ -167,14 +207,41 @@ for entry in st.session_state.display:
         for tc in entry.get("tools", []):
             with st.expander(f"🔧 工具:`{tc['name']}`", expanded=False):
                 st.code(json.dumps(tc["input"], ensure_ascii=False, indent=2), language="json")
+        # 重畫使用者貼過的圖片
+        for img in entry.get("images", []):
+            st.image(img["data"], caption=img.get("name", ""))
         if entry.get("content"):
             st.markdown(entry["content"])
 
 
 # ---------------------------------------------------------------------------
-# Input — either from the chat box, or from a clicked example button
+# Input — either from the chat box, or from a clicked example button.
+# st.chat_input(accept_file=True) 讓使用者可以拖圖進來。
 # ---------------------------------------------------------------------------
-prompt = st.session_state.pop("_pending", None) or st.chat_input("問我台股的事…")
+prompt_pending = st.session_state.pop("_pending", None)
+if prompt_pending is not None:
+    # 例題按鈕 — 只有文字
+    prompt_text, prompt_files = prompt_pending, []
+else:
+    try:
+        chat_value = st.chat_input(
+            "問我台股的事(可拖截圖進來)…",
+            accept_file="multiple",
+        )
+    except TypeError:
+        # 老版 Streamlit 不支援 accept_file,退回純文字模式
+        chat_value = st.chat_input("問我台股的事…")
+    if chat_value is None:
+        prompt_text, prompt_files = None, []
+    elif isinstance(chat_value, str):
+        prompt_text, prompt_files = chat_value, []
+    else:
+        # ChatInputValue: 有 .text 和 .files
+        prompt_text = getattr(chat_value, "text", "") or ""
+        prompt_files = list(getattr(chat_value, "files", []) or [])
+
+# 還是要有 prompt 才往下跑
+prompt = prompt_text if (prompt_text or prompt_files) else None
 
 
 def _consume_turn(prompt: str, text_box, tool_log):
@@ -226,18 +293,57 @@ def _consume_turn(prompt: str, text_box, tool_log):
     return text_buffer[0], tools_seen
 
 
-if prompt:
+if prompt is not None or prompt_files:
+    import base64
+
+    # 把上傳的圖片轉成 Anthropic image content block + 留一份給 UI 重畫
+    image_blocks: list[dict] = []
+    image_for_display: list[dict] = []
+    for f in prompt_files:
+        mime = (getattr(f, "type", None) or "image/png").lower()
+        if not mime.startswith("image/"):
+            continue
+        raw = f.getvalue() if hasattr(f, "getvalue") else f.read()
+        b64 = base64.b64encode(raw).decode("utf-8")
+        image_blocks.append({
+            "type":   "image",
+            "source": {"type": "base64", "media_type": mime, "data": b64},
+        })
+        image_for_display.append({
+            "name": getattr(f, "name", ""),
+            "data": raw,
+        })
+
+    # Build the user message:
+    #   有圖片 → list[block] (image + text)
+    #   只有文字 → string
+    if image_blocks:
+        content_blocks = list(image_blocks)
+        if prompt:
+            content_blocks.append({"type": "text", "text": prompt})
+        agent_input = content_blocks
+        display_text = prompt or "(只貼了圖,沒打字)"
+    else:
+        agent_input = prompt
+        display_text = prompt
+
     # Show user message immediately
-    st.session_state.display.append({"role": "user", "content": prompt})
+    st.session_state.display.append({
+        "role":    "user",
+        "content": display_text,
+        "images":  image_for_display,
+    })
     with st.chat_message("user"):
-        st.markdown(prompt)
+        for img in image_for_display:
+            st.image(img["data"], caption=img.get("name", ""))
+        st.markdown(display_text)
 
     # Run agent
     with st.chat_message("assistant"):
         tool_log = st.container()        # tool calls go here, above the text
         text_box = st.empty()            # streaming text replacement target
         try:
-            full_text, tools_used = _consume_turn(prompt, text_box, tool_log)
+            full_text, tools_used = _consume_turn(agent_input, text_box, tool_log)
             text_box.markdown(full_text)
         except Exception as exc:
             # 把常見的暫時性錯誤翻成中文,避免使用者看到 traceback 嚇到
