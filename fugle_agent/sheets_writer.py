@@ -1,5 +1,5 @@
 """POST helper for the Apps Script Web App that writes to the user's
-'史塔克' Google Sheet.
+'加油好嗎' Google Sheet.
 
 The Web App URL lives in the ``SHEETS_WRITER_URL`` env var (set via Streamlit
 Secrets).  Without it, all calls return an error envelope explaining how to
@@ -88,3 +88,21 @@ def update_trade_realized(**fields) -> dict:
     """把單筆 SELL 的 realized_pnl 寫回「股票交易」對應的 row。
     必要欄位:date, symbol, action, shares, realized_pnl"""
     return _post("update_trade_realized", fields)
+
+
+def add_etf_snapshot(**fields) -> dict:
+    """在「ETF快照」分頁新增一個持股 row。
+    欄位:snapshot_date, etf_symbol, etf_name, stock_symbol, stock_name,
+    weight_pct, source, notes"""
+    return _post("add_etf_snapshot", fields)
+
+
+def add_watchlist_item(**fields) -> dict:
+    """在「追蹤清單」分頁新增一個追蹤項目。
+    欄位:symbol, name, added_date, watch_reason, target_price,
+    alert_when, notes"""
+    return _post("add_watchlist_item", fields)
+
+
+def delete_watchlist_item(symbol: str) -> dict:
+    return _post("delete_watchlist_item", {"symbol": symbol})
