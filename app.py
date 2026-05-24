@@ -66,7 +66,7 @@ _ICON_CANDIDATES = ["icon.png", "icon.jpg", "icon.jpeg"]
 _icon_path = next((p for p in _ICON_CANDIDATES if _p.isfile(p)), "📈")
 
 st.set_page_config(
-    page_title="史塔克 · 我的台股助理",
+    page_title="加油好嗎",
     page_icon=_icon_path,
     layout="centered",
     initial_sidebar_state="auto",
@@ -105,7 +105,7 @@ def _password_gate() -> bool:
         return True
 
     # 3) 否則顯示密碼框
-    st.title("🔒 史塔克 · 我的台股助理")
+    st.title("🔒 加油好嗎")
     with st.form("auth"):
         pwd = st.text_input("輸入存取密碼", type="password")
         ok = st.form_submit_button("進入")
@@ -136,7 +136,7 @@ if not _password_gate():
 # ---------------------------------------------------------------------------
 # Header
 # ---------------------------------------------------------------------------
-st.title("📈 Fugle Agent")
+st.title("📈 加油好嗎")
 mode_badge = "🎭 mock" if SETTINGS.mock else "📡 live"
 st.caption(f"台股研究助理 · {mode_badge} · {MODEL}")
 
