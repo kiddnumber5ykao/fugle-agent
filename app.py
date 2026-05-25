@@ -143,7 +143,71 @@ st.caption(f"台股研究助理 · {mode_badge} · {MODEL}")
 
 # ---------------------------------------------------------------------------
 # Session state — display history (for the UI) + agent history (for the LLM)
+#
+# 啟動時嘗試從 Google Sheet 隱藏分頁載回上次的對話,讓 app 像一個一直在的 bot。
 # ---------------------------------------------------------------------------
+def _strip_history_for_persistence(history: list) -> list:
+    """把 history 裡的圖片 base64 內容換成文字 placeholder
+    (圖片太大塞不進 Sheet cell 的 50K 限制)。"""
+    out = []
+    for msg in history:
+        m = dict(msg)
+        content = m.get("content")
+        if isinstance(content, list):
+            new_blocks = []
+            for blk in content:
+                if isinstance(blk, dict) and blk.get("type") == "image":
+                    new_blocks.append({
+                        "type": "text",
+                        "text": "[使用者上傳過一張圖,內容已從紀錄省略]",
+                    })
+                else:
+                    new_blocks.append(blk)
+            m["content"] = new_blocks
+        out.append(m)
+    return out
+
+
+def _strip_display_for_persistence(display: list) -> list:
+    """display 裡的圖片 raw bytes 換成 name 而已。"""
+    out = []
+    for entry in display:
+        e = dict(entry)
+        if "images" in e:
+            e["images"] = [
+                {"name": img.get("name", ""), "persisted": True}
+                for img in e["images"]
+            ]
+        out.append(e)
+    return out
+
+
+def _persist_chat() -> None:
+    """每回合結束後呼叫 — 把目前 history + display 存進 Sheet。"""
+    try:
+        from fugle_agent import sheets_writer as _sw
+        _sw.save_history({
+            "history": _strip_history_for_persistence(st.session_state.get("history", [])),
+            "display": _strip_display_for_persistence(st.session_state.get("display", [])),
+        })
+    except Exception:
+        pass  # 持久化失敗不應該影響 UX
+
+
+# 一次性:啟動時載入持久化的對話
+if "_persisted_loaded" not in st.session_state:
+    st.session_state._persisted_loaded = True
+    try:
+        from fugle_agent import sheets_writer as _sw
+        _result = _sw.load_history()
+        if _result.get("ok") and _result.get("payload"):
+            _payload = _result["payload"] or {}
+            st.session_state.history = _payload.get("history", [])
+            st.session_state.display = _payload.get("display", [])
+    except Exception:
+        st.session_state.history = []
+        st.session_state.display = []
+
 if "display" not in st.session_state:
     st.session_state.display = []   # [{"role": "user"|"assistant", "content": str, "tools": [...]}]
 if "history" not in st.session_state:
@@ -172,11 +236,16 @@ with st.sidebar:
     if st.button(
         "🗑️ 清除對話",
         use_container_width=True,
-        help="只清掉這個瀏覽器分頁裡的對話歷史。Streamlit Secrets 裡的 "
-             "USER_CONTEXT、API key、Google Sheet 連結都會保留。",
+        help="清掉 session + 跨裝置持久化的對話歷史(Google Sheet 上)。"
+             "USER_CONTEXT、API key、Sheet 上其他資料都保留。",
     ):
         st.session_state.display = []
         st.session_state.history = []
+        try:
+            from fugle_agent import sheets_writer as _sw
+            _sw.clear_history()
+        except Exception:
+            pass
         st.rerun()
 
     st.divider()
@@ -383,3 +452,6 @@ if prompt is not None or prompt_files:
         "content": full_text,
         "tools": tools_used,
     })
+
+    # 持久化:存進 Sheet 隱藏分頁,下次開 app / 切裝置都能接著聊
+    _persist_chat()
