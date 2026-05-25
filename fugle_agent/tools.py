@@ -714,6 +714,12 @@ async def log_stock_trade(args: dict) -> dict:
         # 觸發 Apps Script 全套同步(目標賣價公式、realized_pnl 等)
         sheets_writer.manual_sync()
 
+        # 順便跑一次估值,把現價 / 市值 / 損益填進股票部位
+        try:
+            await valuate_portfolio.handler({"write_back": True})
+        except Exception:
+            pass  # 估值失敗不應該影響交易紀錄寫入
+
         return _envelope({
             "ok": True,
             "action": "BUY",
@@ -766,6 +772,12 @@ async def log_stock_trade(args: dict) -> dict:
 
     # 觸發 Apps Script 全套同步(實際損益 tab、目標賣價公式…一起到位)
     sheets_writer.manual_sync()
+
+    # 順便跑一次估值,讓股票部位的現價/市值/損益欄都新鮮
+    try:
+        await valuate_portfolio.handler({"write_back": True})
+    except Exception:
+        pass
 
     return _envelope({
         "ok": True,
