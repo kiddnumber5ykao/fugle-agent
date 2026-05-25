@@ -106,3 +106,28 @@ def add_watchlist_item(**fields) -> dict:
 
 def delete_watchlist_item(symbol: str) -> dict:
     return _post("delete_watchlist_item", {"symbol": symbol})
+
+
+def manual_sync() -> dict:
+    """觸發 Apps Script 跑一次完整同步:
+    重建股票部位 + 寫 realized_pnl 到股票交易 + 同步「實際損益」分頁 + 寫目標賣價公式。
+    Python 端寫完任何交易應該呼叫這個確保所有衍生 tab 都到位。"""
+    return _post("manual_sync", {})
+
+
+# ---- 對話歷史持久化 ----
+
+def save_history(payload: dict) -> dict:
+    """把 {history, display} 整包存到 Google Sheet 隱藏分頁。"""
+    return _post("save_history", {"payload": payload})
+
+
+def load_history() -> dict:
+    """從 Google Sheet 隱藏分頁載回上次的對話。
+    回傳 {ok, payload: {history, display} | None, saved_at}"""
+    return _post("load_history", {})
+
+
+def clear_history() -> dict:
+    """清掉持久化的對話歷史。"""
+    return _post("clear_history", {})
