@@ -28,11 +28,15 @@ POSITIONS_TAB_ENV = "PORTFOLIO_POSITIONS_TAB"
 TRADES_TAB_ENV = "PORTFOLIO_TRADES_TAB"
 FUNDS_TAB_ENV = "PORTFOLIO_FUNDS_TAB"
 FUND_TRADES_TAB_ENV = "PORTFOLIO_FUND_TRADES_TAB"
+ETF_SNAPSHOTS_TAB_ENV = "PORTFOLIO_ETF_SNAPSHOTS_TAB"
+WATCHLIST_TAB_ENV = "PORTFOLIO_WATCHLIST_TAB"
 
 DEFAULT_POSITIONS_TAB = "股票部位"
 DEFAULT_TRADES_TAB = "股票交易"
 DEFAULT_FUNDS_TAB = "基金部位"
 DEFAULT_FUND_TRADES_TAB = "基金交易"
+DEFAULT_ETF_SNAPSHOTS_TAB = "ETF快照"
+DEFAULT_WATCHLIST_TAB = "追蹤清單"
 
 
 # ---------------------------------------------------------------------------
@@ -172,8 +176,11 @@ def normalize_trade(row: dict) -> dict | None:
         "shares":     int(_num(row.get("shares") or row.get("股數"))),
         "price":      _num(row.get("price") or row.get("成交價")),
         "fees":       _num(row.get("fees") or row.get("手續費")),
-        # 新增:每筆交易的 total_cost(可選),做為 price + fees 的替代填法。
-        # BUY 時 = 你實際付的錢;SELL 時 = 你實際收到的錢(都可填,程式自己處理)
+        # 證交稅獨立欄位 — BUY 通常為 0,SELL 為 (成交金額 × 0.3% 或 ETF 0.1%)
+        # 舊資料如果沒這欄,tax = 0,程式會把 fees 當作「手續費 + 稅」合計處理(向後相容)
+        "tax":        _num(row.get("tax") or row.get("證交稅")),
+        # 每筆交易的 total_cost(可選),做為 price + fees + tax 的替代填法
+        # BUY 時 = 你實際付的錢;SELL 時 = 你實際收到的錢
         "total_cost": _num(row.get("total_cost") or row.get("總金額")
                            or row.get("成交金額") or row.get("結算金額")),
         "notes":      row.get("notes") or row.get("備註") or "",
@@ -270,3 +277,15 @@ def load_fund_trades() -> list[dict]:
         return rows
     out = [normalize_fund_trade(r) for r in rows]
     return [r for r in out if r is not None]
+
+
+def load_watchlist() -> list[dict]:
+    """讀「追蹤清單」分頁原始 row(沒做 normalize,因為欄位開放)。"""
+    tab = os.getenv(WATCHLIST_TAB_ENV, DEFAULT_WATCHLIST_TAB)
+    return fetch_tab(tab)
+
+
+def load_etf_snapshots() -> list[dict]:
+    """讀「ETF快照」分頁所有快照 row。"""
+    tab = os.getenv(ETF_SNAPSHOTS_TAB_ENV, DEFAULT_ETF_SNAPSHOTS_TAB)
+    return fetch_tab(tab)

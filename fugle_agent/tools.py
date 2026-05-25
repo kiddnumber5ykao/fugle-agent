@@ -22,6 +22,61 @@ def _now_tw_str() -> str:
     tw = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
     return tw.strftime("%Y-%m-%d %H:%M:%S")
 
+
+# ---------- 中文欄位名 alias(讓 Sheet 用英中任一套 header 都行) ----------
+# Apps Script 只寫到「實際存在」的 header,所以同時送英中兩個 key 沒副作用。
+
+_ZH_ALIASES: dict[str, dict[str, str]] = {
+    "positions": {
+        "symbol": "代號", "name": "名稱", "shares": "股數",
+        "total_cost": "總成本", "cost_per_share": "成本價",
+        "last_updated": "上次更新", "notes": "備註",
+        "current_price": "現價", "market_value": "市值",
+        "net_proceeds": "淨賣出", "unrealized_pnl": "未實現損益",
+        "pnl_pct": "損益%", "valuated_at": "估算時間",
+    },
+    "trades": {
+        "date": "日期", "symbol": "代號", "name": "名稱",
+        "action": "動作", "shares": "股數", "price": "成交價",
+        "fees": "手續費", "tax": "證交稅",
+        "total_cost": "總金額", "notes": "備註",
+        # realized_pnl 已遷移到「實際損益」分頁,股票交易這邊就不再寫
+    },
+    "funds": {
+        "fund_id": "代號", "name": "名稱", "units": "單位數",
+        "total_cost": "總成本", "cost_per_unit": "單位成本",
+        "last_updated": "上次更新", "notes": "備註",
+        "current_nav": "目前NAV",
+    },
+    "fund_trades": {
+        "date": "日期", "fund_id": "代號", "name": "名稱",
+        "action": "動作", "units": "單位數", "nav": "NAV",
+        "fees": "手續費", "total_cost": "總金額", "notes": "備註",
+    },
+    "etf_snapshot": {
+        "snapshot_date": "快照日期", "etf_symbol": "ETF代號",
+        "etf_name": "ETF名稱", "stock_symbol": "持股代號",
+        "stock_name": "持股名稱", "weight_pct": "比例",
+        "source": "資料來源", "notes": "備註",
+    },
+    "watchlist": {
+        "symbol": "代號", "name": "名稱", "added_date": "加入日期",
+        "watch_reason": "追蹤理由", "target_price": "目標價",
+        "alert_when": "提醒條件", "notes": "備註",
+    },
+}
+
+
+def _zh(payload: dict, context: str) -> dict:
+    """把英文 key 的 payload 加上對應中文 alias key。
+    Apps Script 只 setValue 到 sheet 上實際存在的 header,所以兩個都送沒副作用 —
+    使用者用中文 header 就寫中文那欄,用英文 header 就寫英文那欄。"""
+    out = dict(payload)
+    for en, zh in _ZH_ALIASES.get(context, {}).items():
+        if en in payload and zh not in out:
+            out[zh] = payload[en]
+    return out
+
 try:  # the SDK is only required when running the real agent — tests can skip
     from claude_agent_sdk import tool  # type: ignore
 except Exception:  # pragma: no cover — fallback for unit tests / mock-only use
@@ -611,13 +666,16 @@ async def log_stock_trade(args: dict) -> dict:
     notes   = str(args.get("notes") or "")
     name_in = str(args.get("name") or "").strip()  # 使用者顯式給的名字(罕見)
 
-    # 1) 寫入「股票交易」— 把 name 也帶過去(若 sheet 沒這欄就自動忽略)
+    # 1) 寫入「股票交易」— fees 跟 tax 分開寫,方便對帳
     auto_name = name_in or _lookup_stock_name(symbol)
-    log_result = sheets_writer.add_trade(
-        date=date, symbol=symbol, name=auto_name,
-        action=action, shares=shares,
-        price=price, fees=fees + tax, notes=notes,
-    )
+    log_result = sheets_writer.add_trade(**_zh({
+        "date": date, "symbol": symbol, "name": auto_name,
+        "action": action, "shares": shares,
+        "price": price,
+        "fees": fees,    # 純手續費
+        "tax":  tax,     # 證交稅(BUY 通常為 0)
+        "notes": notes,
+    }, "trades"))
     if not log_result.get("ok"):
         return _envelope({
             "error": f"寫入股票交易失敗: {log_result.get('error')}",
@@ -644,14 +702,18 @@ async def log_stock_trade(args: dict) -> dict:
             new_shares = shares
             new_total_cost = (shares * price) + fees
 
-        upd = sheets_writer.upsert_position(
-            symbol=symbol,
-            name=(existing or {}).get("name") or auto_name,
-            shares=new_shares,
-            total_cost=round(new_total_cost, 2),
-            last_updated=date,
-            notes=(existing or {}).get("notes", "") or "",
-        )
+        upd = sheets_writer.upsert_position(**_zh({
+            "symbol": symbol,
+            "name": (existing or {}).get("name") or auto_name,
+            "shares": new_shares,
+            "total_cost": round(new_total_cost, 2),
+            "last_updated": date,
+            "notes": (existing or {}).get("notes", "") or "",
+        }, "positions"))
+
+        # 觸發 Apps Script 全套同步(目標賣價公式、realized_pnl 等)
+        sheets_writer.manual_sync()
+
         return _envelope({
             "ok": True,
             "action": "BUY",
@@ -687,20 +749,23 @@ async def log_stock_trade(args: dict) -> dict:
     new_shares = existing["shares"] - shares
     new_total_cost = max(0.0, existing["total_cost"] - cost_of_sold)
 
-    upd = sheets_writer.upsert_position(
-        symbol=symbol,
-        name=existing.get("name") or auto_name,
-        shares=new_shares,
-        total_cost=round(new_total_cost, 2),
-        last_updated=date,
-        notes=existing.get("notes", ""),
-    )
+    upd = sheets_writer.upsert_position(**_zh({
+        "symbol": symbol,
+        "name": existing.get("name") or auto_name,
+        "shares": new_shares,
+        "total_cost": round(new_total_cost, 2),
+        "last_updated": date,
+        "notes": existing.get("notes", ""),
+    }, "positions"))
 
     # 把這筆 SELL 的 realized_pnl 寫回「股票交易」剛剛新增的那一列
     realized_writeback = sheets_writer.update_trade_realized(
         date=date, symbol=symbol, action="SELL", shares=shares,
         realized_pnl=round(realized_pnl, 2),
     )
+
+    # 觸發 Apps Script 全套同步(實際損益 tab、目標賣價公式…一起到位)
+    sheets_writer.manual_sync()
 
     return _envelope({
         "ok": True,
@@ -754,10 +819,10 @@ async def log_fund_trade(args: dict) -> dict:
     auto_name = name_in or _lookup_fund_name(fid)
 
     # 1) 先寫入「基金交易」— 連 name 一起帶
-    log_result = sheets_writer.add_fund_trade(
-        date=date, fund_id=fid, name=auto_name, action=action,
-        units=units, nav=nav, fees=fees, notes=notes,
-    )
+    log_result = sheets_writer.add_fund_trade(**_zh({
+        "date": date, "fund_id": fid, "name": auto_name, "action": action,
+        "units": units, "nav": nav, "fees": fees, "notes": notes,
+    }, "fund_trades"))
     if not log_result.get("ok"):
         return _envelope({
             "error": f"寫入基金交易失敗: {log_result.get('error')}",
@@ -777,14 +842,14 @@ async def log_fund_trade(args: dict) -> dict:
             new_units = units
             new_total_cost = (units * nav) + fees
 
-        upd = sheets_writer.upsert_fund(
-            fund_id=fid,
-            name=(existing or {}).get("name") or auto_name,
-            units=new_units,
-            total_cost=round(new_total_cost, 2),
-            last_updated=date,
-            notes=(existing or {}).get("notes", "") or notes,
-        )
+        upd = sheets_writer.upsert_fund(**_zh({
+            "fund_id": fid,
+            "name": (existing or {}).get("name") or auto_name,
+            "units": new_units,
+            "total_cost": round(new_total_cost, 2),
+            "last_updated": date,
+            "notes": (existing or {}).get("notes", "") or notes,
+        }, "funds"))
         return _envelope({
             "ok": True, "action": "BUY", "fund_updated": upd.get("ok"),
             "name_used": (existing or {}).get("name") or auto_name,
@@ -807,14 +872,14 @@ async def log_fund_trade(args: dict) -> dict:
     new_units = existing["units"] - units
     new_total_cost = max(0.0, existing["total_cost"] - cost_of_sold)
 
-    upd = sheets_writer.upsert_fund(
-        fund_id=fid,
-        name=existing.get("name") or auto_name,
-        units=new_units,
-        total_cost=round(new_total_cost, 2),
-        last_updated=date,
-        notes=existing.get("notes", ""),
-    )
+    upd = sheets_writer.upsert_fund(**_zh({
+        "fund_id": fid,
+        "name": existing.get("name") or auto_name,
+        "units": new_units,
+        "total_cost": round(new_total_cost, 2),
+        "last_updated": date,
+        "notes": existing.get("notes", ""),
+    }, "funds"))
     return _envelope({
         "ok": True, "action": "SELL", "fund_updated": upd.get("ok"),
         "remaining_units": new_units,
@@ -1640,6 +1705,297 @@ async def get_realized_pnl(args: dict) -> dict:
 
 
 @tool(
+    "record_etf_snapshot",
+    "**把 ETF 持股快照寫進 Sheet「ETF快照」分頁** — 一檔股票一個 row,"
+    "用來累積使用者自己的 ETF 持股時序資料庫(主動式 ETF 經理人調倉趨勢)。"
+    "適用情境:使用者上傳官方/聚合商的持股截圖,你解析後**先回顯給使用者確認,確認後**才呼叫這個。"
+    "使用者只需給日期、ETF 代號、持股清單(代號 + 權重);名字會自動補。",
+    {
+        "type": "object",
+        "properties": {
+            "snapshot_date": {"type": "string", "description": "資料日期 YYYY-MM-DD"},
+            "etf_symbol":    {"type": "string", "description": "ETF 代號"},
+            "etf_name":      {"type": "string", "description": "選填,沒給會用 search_taiwan_symbol 查"},
+            "source":        {"type": "string", "description": "資料來源,如「統一投信官網」「MoneyDJ 截圖」"},
+            "holdings": {
+                "type": "array",
+                "description": "持股清單,可一次傳多筆(通常前 10 大)",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "symbol":     {"type": "string"},
+                        "name":       {"type": "string", "description": "選填"},
+                        "weight_pct": {"type": "number", "description": "權重 %"},
+                    },
+                    "required": ["symbol", "weight_pct"],
+                },
+            },
+            "notes": {"type": "string"},
+        },
+        "required": ["snapshot_date", "etf_symbol", "holdings"],
+    },
+)
+async def record_etf_snapshot(args: dict) -> dict:
+    date     = str(args["snapshot_date"]).strip()
+    etf_sym  = str(args["etf_symbol"]).strip().upper()
+    etf_name = str(args.get("etf_name") or "").strip() or _lookup_stock_name(etf_sym)
+    source   = str(args.get("source") or "").strip()
+    notes    = str(args.get("notes") or "").strip()
+    holdings = args.get("holdings") or []
+    if not holdings:
+        return _envelope({"error": "持股清單是空的"})
+
+    results: list[dict] = []
+    n_ok = 0
+    for h in holdings:
+        sym = str(h.get("symbol", "")).strip()
+        if not sym:
+            results.append({"symbol": "", "error": "缺少 symbol"})
+            continue
+        name = str(h.get("name") or "").strip() or _lookup_stock_name(sym)
+        try:
+            weight = float(h.get("weight_pct") or 0)
+        except (TypeError, ValueError):
+            weight = 0.0
+        res = sheets_writer.add_etf_snapshot(**_zh({
+            "snapshot_date": date,
+            "etf_symbol":    etf_sym,
+            "etf_name":      etf_name,
+            "stock_symbol":  sym,
+            "stock_name":    name,
+            "weight_pct":    round(weight, 4),
+            "source":        source,
+            "notes":         notes,
+        }, "etf_snapshot"))
+        ok = bool(res.get("ok"))
+        if ok:
+            n_ok += 1
+        results.append({
+            "symbol":     sym,
+            "name":       name,
+            "weight_pct": round(weight, 4),
+            "ok":         ok,
+            "error":      res.get("error"),
+        })
+
+    return _envelope({
+        "ok":          True,
+        "etf":         f"{etf_sym} {etf_name}".strip(),
+        "date":        date,
+        "n_written":   n_ok,
+        "n_failed":    len(holdings) - n_ok,
+        "details":     results,
+        "hint":        ("如果 n_failed > 0,請確認 Sheet 有「ETF快照」分頁、Apps Script 已"
+                        "重新部署最新版(含 add_etf_snapshot 動作)。"),
+    })
+
+
+@tool(
+    "add_to_watchlist",
+    "**新增一檔或多檔股票到「追蹤清單」分頁**。"
+    "適用情境:使用者上傳 e Trader / 任何來源的個股清單截圖,你解析後寫入。"
+    "**name 不用填**,系統自己用 symbol_lookup 查。寫入前先回顯給使用者確認。",
+    {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "description": "追蹤清單項目,可一次多筆",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "symbol":       {"type": "string"},
+                        "name":         {"type": "string", "description": "選填"},
+                        "watch_reason": {"type": "string", "description": "為什麼追蹤,如「AI 概念」「等回檔」"},
+                        "target_price": {"type": "number", "description": "目標價(選填)"},
+                        "alert_when":   {"type": "string", "enum": ["above", "below", "equal"],
+                                         "description": "達標方向(選填)"},
+                        "notes":        {"type": "string"},
+                    },
+                    "required": ["symbol"],
+                },
+            },
+        },
+        "required": ["items"],
+    },
+)
+async def add_to_watchlist(args: dict) -> dict:
+    items = args.get("items") or []
+    if not items:
+        return _envelope({"error": "items 是空的"})
+
+    today = _now_tw_str().split(" ")[0]  # YYYY-MM-DD
+    results: list[dict] = []
+    n_ok = 0
+    for it in items:
+        sym = str(it.get("symbol", "")).strip()
+        if not sym:
+            results.append({"symbol": "", "error": "缺少 symbol"})
+            continue
+        name = str(it.get("name") or "").strip() or _lookup_stock_name(sym)
+        payload = _zh({
+            "symbol":       sym,
+            "name":         name,
+            "added_date":   today,
+            "watch_reason": str(it.get("watch_reason") or "").strip(),
+            "target_price": it.get("target_price") if it.get("target_price") is not None else "",
+            "alert_when":   str(it.get("alert_when") or "").strip(),
+            "notes":        str(it.get("notes") or "").strip(),
+        }, "watchlist")
+        res = sheets_writer.add_watchlist_item(**payload)
+        ok = bool(res.get("ok"))
+        if ok:
+            n_ok += 1
+        results.append({
+            "symbol": sym, "name": name, "ok": ok,
+            "error": res.get("error"),
+        })
+
+    return _envelope({
+        "ok":         True,
+        "n_added":    n_ok,
+        "n_failed":   len(items) - n_ok,
+        "details":    results,
+    })
+
+
+@tool(
+    "get_watchlist",
+    "**讀「追蹤清單」分頁** — 回傳使用者目前在關注但還沒買的所有股票。"
+    "使用者問「我在追蹤什麼?」「我的觀察清單?」「我準備買什麼?」用這個。",
+    {"type": "object", "properties": {}, "required": []},
+)
+async def get_watchlist(args: dict) -> dict:
+    rows = sheets.load_watchlist()
+    if rows and rows[0].get("_error"):
+        return _envelope({"error": rows[0]["_error"]})
+    return _envelope({
+        "n_items": len(rows),
+        "items":   rows,
+    })
+
+
+@tool(
+    "compute_target_sell_prices",
+    "**算出每檔部位「要賣到多少」才能淨賺 X%(扣完手續費 + 證交稅之後)**。"
+    "預設目標 0% / 5% / 10% / 15% / 20%。ETF 套 0.1% 稅,一般股套 0.3% 稅,"
+    "手續費用 USER_FEE_RATE(預設 0.1425%、下限 NT$1)。"
+    "也會抓即時價算「距離目標還差多少 %」。"
+    "使用者問「我要賺 X% 要賣多少」「2330 回本價多少」「我的停利目標」用這個。",
+    {
+        "type": "object",
+        "properties": {
+            "symbol":      {"type": "string", "description": "選填,只算一檔;沒給就算全部部位"},
+            "target_pcts": {
+                "type": "array",
+                "items": {"type": "number"},
+                "description": "目標淨報酬率(用 5 表示 5%,不是 0.05)。預設 [0,5,10,15,20]",
+            },
+            "fee_rate":    {"type": "number", "description": "選填 override 手續費率"},
+            "fee_min":     {"type": "number", "description": "選填 override 手續費下限"},
+        },
+        "required": [],
+    },
+)
+async def compute_target_sell_prices(args: dict) -> dict:
+    fee_rate = float((args or {}).get("fee_rate")
+                     or os.getenv("USER_FEE_RATE", "0.001425"))
+    fee_min  = float((args or {}).get("fee_min")
+                     or os.getenv("USER_FEE_MIN", "1"))
+    target_pcts = (args or {}).get("target_pcts") or [0, 5, 10, 15, 20]
+    sym_filter = str((args or {}).get("symbol") or "").strip()
+
+    positions = sheets.load_positions()
+    if positions and positions[0].get("_error"):
+        return _envelope({"error": positions[0]["_error"]})
+
+    rows: list[dict] = []
+    for p in positions:
+        sym = str(p.get("symbol", "")).strip()
+        if sym_filter and sym != sym_filter:
+            continue
+        shares = int(p.get("shares") or 0)
+        total_cost = float(p.get("total_cost") or 0)
+        if shares <= 0 or total_cost <= 0:
+            continue
+
+        # ETF (代號 00 開頭) 套 0.1%,一般股套 0.3%
+        is_etf   = sym.startswith("00") and len(sym) >= 4
+        tax_rate = 0.001 if is_etf else 0.003
+
+        # 抓現價:Fugle 優先,失敗用 Sheet 上的 current_price
+        price: float | None = None
+        price_source = "none"
+        try:
+            q = _client.quote(sym)
+            for k in ("lastPrice", "closePrice", "price", "referencePrice"):
+                v = q.get(k) if isinstance(q, dict) else None
+                if v:
+                    price = float(v)
+                    price_source = f"fugle.{k}"
+                    break
+        except Exception:
+            pass
+        if not price:
+            manual = p.get("current_price")
+            if manual:
+                try:
+                    price = float(manual)
+                    price_source = "sheet.current_price"
+                except (TypeError, ValueError):
+                    price = None
+
+        # 對每個目標 % 算對應賣價
+        # 數學:net_proceeds = TC × (1 + P/100) = gross × (1 - fee_rate - tax_rate)
+        # → gross = TC(1+P/100) / (1 - fee_rate - tax_rate)
+        # → sell_price = gross / shares
+        # 如果手續費小於 NT$1 下限,改用 fee_min 版公式
+        targets = []
+        for pct in target_pcts:
+            target_net = total_cost * (1 + pct / 100.0)
+            # 先試「百分比手續費」版
+            gross = target_net / (1 - fee_rate - tax_rate)
+            actual_fee = gross * fee_rate
+            if actual_fee < fee_min:
+                # 手續費被下限蓋過 → 換公式重算
+                gross = (target_net + fee_min) / (1 - tax_rate)
+            sell_price = gross / shares
+            dist = ((sell_price - price) / price * 100) if (price and price > 0) else None
+            targets.append({
+                "target_pct": pct,
+                "sell_price": round(sell_price, 2),
+                "distance_from_current_pct": round(dist, 2) if dist is not None else None,
+            })
+
+        rows.append({
+            "symbol":         sym,
+            "name":           p.get("name", ""),
+            "shares":         shares,
+            "total_cost":     round(total_cost, 2),
+            "cost_per_share": round(total_cost / shares, 4),
+            "current_price":  round(price, 4) if price else None,
+            "price_source":   price_source,
+            "is_etf":         is_etf,
+            "tax_rate":       tax_rate,
+            "targets":        targets,
+        })
+
+    return _envelope({
+        "ok":            True,
+        "mode":          _client.mode,
+        "fee_rate_used": fee_rate,
+        "fee_min_used":  fee_min,
+        "n_positions":   len(rows),
+        "positions":     rows,
+        "note": (
+            "公式:目標賣價 = (總成本 × (1 + 目標%)) ÷ (股數 × (1 - 手續費率 - 證交稅率))。"
+            "賣到該價會「實際進你戶頭」剛好等於對應的淨報酬率。"
+            "ETF 因為證交稅只有 0.1%(一般股 0.3%),目標賣價會比一般股低一點點(對你有利)。"
+        ),
+    })
+
+
+@tool(
     "ping_sheets_writer",
     "測試 Apps Script Web App 是否能正常呼叫。回傳 {ok: true, pong: 時間戳} 代表通了。"
     "用來 debug SHEETS_WRITER_URL 設定。",
@@ -1664,6 +2020,10 @@ ALL_TOOLS = [
     valuate_portfolio,
     sync_portfolio_from_trades,
     get_realized_pnl,
+    record_etf_snapshot,
+    add_to_watchlist,
+    get_watchlist,
+    compute_target_sell_prices,
     ping_sheets_writer,
     get_us_quote,
     get_us_candles,
