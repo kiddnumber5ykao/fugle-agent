@@ -2051,42 +2051,45 @@ def _signal_summary_zh(rsi14, dist_20ma, dist_60ma, change_5d, dist_52w_high) ->
 
 
 def _watchlist_verdict(signals: dict) -> str:
-    """追蹤清單 AI 建議規則(固定不變,確保每次答案一致):
-        ❌ 不建議:RSI ≥ 70 或 近5日漲 ≥ 5%
-        ✅ 可進場:(RSI ≤ 35 且現價跌破 20MA) 或 近5日跌 ≥ 5%
-        🟡 觀察:其他"""
+    """追蹤清單 AI 建議規則(對齊使用者 USER_CONTEXT「跌到位 = 進場機會」邏輯):
+        ❌ 暫不:        RSI ≥ 70 或 近 5 日漲 ≥ 5%(過熱、追高風險)
+        🟢 進場機會:    (RSI ≤ 35 且現價跌破 20MA) 或 近 5 日跌 ≥ 5%(技術超賣)
+        🟡 觀察:        其他"""
     if not signals.get("ok"):
         return "—"
     rsi_ = signals["rsi14"]
     dist_20ma = signals["dist_20ma_pct"]
     change_5d = signals["change_5d_pct"]
     if rsi_ >= 70 or change_5d >= 5:
-        return "❌ 不建議"
+        return "❌ 暫不"
     if (rsi_ <= 35 and dist_20ma < 0) or change_5d <= -5:
-        return "✅ 可進場"
+        return "🟢 進場機會"
     return "🟡 觀察"
 
 
 def _position_verdict(signals: dict, pnl_pct: float) -> str:
-    """股票部位 AI 建議規則(固定不變):
-        🔴 全部停利:損益 ≥ 20%
-        🟠 停利 1/2:損益 ≥ 10%
-        🟡 停利 1/4:損益 ≥ 5%
-        ❌ 考慮停損:損益 ≤ -10% 且 RSI ≥ 45(沒超賣訊號可期反彈)
-        🟢 可加碼:  損益 ≤ -5% 且 RSI ≤ 35
-        ⚠️ 警戒:    RSI ≥ 70 或 跌破 60MA
-        🔵 續抱:    其他"""
+    """股票部位 AI 建議規則(對齊使用者 USER_CONTEXT 的 5/10/15/20% 分階段獲利策略):
+        🚨 立刻出場:   損益 ≥ 20%(20% 是天花板,不貪)
+        🔴 強烈建議出場:損益 ≥ 15%
+        🟠 建議出場:   損益 ≥ 10%
+        🟡 可考慮出場: 損益 ≥ 5%
+        ❌ 考慮停損:   損益 ≤ -10% 且 RSI ≥ 45(沒超賣訊號可期反彈)
+        🟢 可加碼:     損益 ≤ -5% 且 RSI ≤ 35(跌深 + 超賣可加碼壓低成本)
+        ⚠️ 警戒:       RSI ≥ 70 或 跌破 60MA(過熱或趨勢轉壞)
+        🔵 續抱:       其他"""
     if not signals.get("ok"):
         return "—"
     rsi_ = signals["rsi14"]
     dist_60ma = signals["dist_60ma_pct"]
 
     if pnl_pct >= 20:
-        return "🔴 全部停利"
+        return "🚨 立刻出場"
+    if pnl_pct >= 15:
+        return "🔴 強烈建議出場"
     if pnl_pct >= 10:
-        return "🟠 停利 1/2"
+        return "🟠 建議出場"
     if pnl_pct >= 5:
-        return "🟡 停利 1/4"
+        return "🟡 可考慮出場"
     if pnl_pct <= -10 and rsi_ >= 45:
         return "❌ 考慮停損"
     if pnl_pct <= -5 and rsi_ <= 35:
