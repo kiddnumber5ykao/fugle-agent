@@ -276,9 +276,13 @@ for entry in st.session_state.display:
         for tc in entry.get("tools", []):
             with st.expander(f"🔧 工具:`{tc['name']}`", expanded=False):
                 st.code(json.dumps(tc["input"], ensure_ascii=False, indent=2), language="json")
-        # 重畫使用者貼過的圖片
+        # 重畫使用者貼過的圖片(持久化載回的圖片 data 已 strip,只顯示 placeholder)
         for img in entry.get("images", []):
-            st.image(img["data"], caption=img.get("name", ""))
+            if img.get("data"):
+                st.image(img["data"], caption=img.get("name", ""))
+            else:
+                # 持久化載回來,圖片 bytes 已從紀錄省略
+                st.caption(f"📸 _{img.get('name', '圖片')}(已從歷史紀錄省略)_")
         if entry.get("content"):
             st.markdown(entry["content"])
 
