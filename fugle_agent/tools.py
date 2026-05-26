@@ -1803,75 +1803,6 @@ async def record_etf_snapshot(args: dict) -> dict:
 
 
 @tool(
-    "add_to_watchlist",
-    "**新增一檔或多檔股票到「追蹤清單」分頁**。"
-    "適用情境:使用者上傳 e Trader / 任何來源的個股清單截圖,你解析後寫入。"
-    "**name 不用填**,系統自己用 symbol_lookup 查。寫入前先回顯給使用者確認。",
-    {
-        "type": "object",
-        "properties": {
-            "items": {
-                "type": "array",
-                "description": "追蹤清單項目,可一次多筆",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "symbol":       {"type": "string"},
-                        "name":         {"type": "string", "description": "選填"},
-                        "watch_reason": {"type": "string", "description": "為什麼追蹤,如「AI 概念」「等回檔」"},
-                        "target_price": {"type": "number", "description": "目標價(選填)"},
-                        "alert_when":   {"type": "string", "enum": ["above", "below", "equal"],
-                                         "description": "達標方向(選填)"},
-                        "notes":        {"type": "string"},
-                    },
-                    "required": ["symbol"],
-                },
-            },
-        },
-        "required": ["items"],
-    },
-)
-async def add_to_watchlist(args: dict) -> dict:
-    items = args.get("items") or []
-    if not items:
-        return _envelope({"error": "items 是空的"})
-
-    today = _now_tw_str().split(" ")[0]  # YYYY-MM-DD
-    results: list[dict] = []
-    n_ok = 0
-    for it in items:
-        sym = str(it.get("symbol", "")).strip()
-        if not sym:
-            results.append({"symbol": "", "error": "缺少 symbol"})
-            continue
-        name = str(it.get("name") or "").strip() or _lookup_stock_name(sym)
-        payload = _zh({
-            "symbol":       sym,
-            "name":         name,
-            "added_date":   today,
-            "watch_reason": str(it.get("watch_reason") or "").strip(),
-            "target_price": it.get("target_price") if it.get("target_price") is not None else "",
-            "alert_when":   str(it.get("alert_when") or "").strip(),
-            "notes":        str(it.get("notes") or "").strip(),
-        }, "watchlist")
-        res = sheets_writer.add_watchlist_item(**payload)
-        ok = bool(res.get("ok"))
-        if ok:
-            n_ok += 1
-        results.append({
-            "symbol": sym, "name": name, "ok": ok,
-            "error": res.get("error"),
-        })
-
-    return _envelope({
-        "ok":         True,
-        "n_added":    n_ok,
-        "n_failed":   len(items) - n_ok,
-        "details":    results,
-    })
-
-
-@tool(
     "get_watchlist",
     "**讀「追蹤清單」分頁** — 回傳使用者目前在關注但還沒買的所有股票。"
     "使用者問「我在追蹤什麼?」「我的觀察清單?」「我準備買什麼?」用這個。",
@@ -2007,6 +1938,379 @@ async def compute_target_sell_prices(args: dict) -> dict:
     })
 
 
+# =============================================================================
+# 🎯 「整理一下」工作流 — 對追蹤清單 / 股票部位每一檔跑 K 線分析 + AI 建議
+# =============================================================================
+
+def _compute_signals(sym: str) -> dict:
+    """對單一代號抓 ~270 個交易日 K 線、跑 RSI/SMA/52w high。
+    回傳 5 個訊號 + 白話訊號摘要。失敗時 ok=False。"""
+    try:
+        to_dt = datetime.now()
+        from_dt = to_dt - timedelta(days=400)  # cal days,留 buffer 給休市
+        data = _client.candles(sym,
+                                from_date=from_dt.strftime("%Y-%m-%d"),
+                                to_date=to_dt.strftime("%Y-%m-%d"))
+        bars = data.get("data", [])
+        if len(bars) < 60:
+            return {"ok": False, "error": f"K 線只 {len(bars)} 根,不夠算 60MA"}
+        closes = [b["close"] for b in bars]
+
+        # 抓即時價:Fugle quote 優先,失敗用最後一根 close
+        current = closes[-1]
+        try:
+            q = _client.quote(sym)
+            for k in ("lastPrice", "closePrice", "price",
+                      "referencePrice", "previousClose"):
+                v = q.get(k) if isinstance(q, dict) else None
+                if v:
+                    current = float(v)
+                    break
+        except Exception:
+            pass
+
+        rsi14 = rsi(closes, 14)[-1]
+        ma20 = sma(closes, 20)[-1]
+        ma60 = sma(closes, 60)[-1]
+        dist_20ma_pct = (current / ma20 - 1) * 100 if ma20 else 0
+        dist_60ma_pct = (current / ma60 - 1) * 100 if ma60 else 0
+        change_5d_pct = (current / closes[-6] - 1) * 100 if len(closes) >= 6 else 0
+        window = closes[-252:] if len(closes) >= 252 else closes   # 52 週 ≈ 252 個交易日
+        high_52w = max(window)
+        dist_52w_high_pct = (current / high_52w - 1) * 100 if high_52w else 0
+
+        return {
+            "ok": True,
+            "current_price":     round(current, 2),
+            "rsi14":             round(rsi14, 1),
+            "dist_20ma_pct":     round(dist_20ma_pct, 2),
+            "dist_60ma_pct":     round(dist_60ma_pct, 2),
+            "change_5d_pct":     round(change_5d_pct, 2),
+            "dist_52w_high_pct": round(dist_52w_high_pct, 2),
+            "summary":           _signal_summary_zh(rsi14, dist_20ma_pct, dist_60ma_pct,
+                                                     change_5d_pct, dist_52w_high_pct),
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _signal_summary_zh(rsi14, dist_20ma, dist_60ma, change_5d, dist_52w_high) -> str:
+    """把 5 個訊號翻譯成白話一句話(不出現專有名詞,給使用者直接看)。"""
+    parts = []
+    # RSI → 「大家在買還是在賣」
+    if rsi14 >= 70:
+        parts.append("大家在搶買、可能過熱")
+    elif rsi14 >= 55:
+        parts.append("買的人較多")
+    elif rsi14 >= 45:
+        parts.append("買賣勢均力敵")
+    elif rsi14 >= 30:
+        parts.append("賣的人較多")
+    else:
+        parts.append("大家都在賣、可能殺過頭")
+
+    # 短期均線位置
+    if dist_20ma < -3:
+        parts.append("短期跌深")
+    elif dist_20ma < 0:
+        parts.append("短期跌破均線")
+    elif dist_20ma <= 3:
+        parts.append("貼近短期均線")
+    else:
+        parts.append("短期漲很多")
+
+    # 中期均線(只在轉弱時才提)
+    if dist_60ma < -5:
+        parts.append("中期趨勢已壞")
+    elif dist_60ma < 0:
+        parts.append("中期略弱")
+
+    # 近 5 日漲跌
+    if change_5d <= -5:
+        parts.append(f"這週跌很慘({change_5d:.1f}%)")
+    elif change_5d <= -2:
+        parts.append(f"最近在跌({change_5d:.1f}%)")
+    elif change_5d >= 5:
+        parts.append(f"這週漲很多(+{change_5d:.1f}%)")
+    elif change_5d >= 2:
+        parts.append(f"最近在漲(+{change_5d:.1f}%)")
+    else:
+        parts.append("最近價格沒什麼動")
+
+    # 距 52 週高
+    if dist_52w_high >= -3:
+        parts.append("貼近一年新高")
+    elif dist_52w_high >= -10:
+        parts.append(f"離一年高點 {-dist_52w_high:.0f}%")
+    elif dist_52w_high >= -25:
+        parts.append(f"離一年高點滿遠({-dist_52w_high:.0f}%)")
+    else:
+        parts.append(f"從高點摔很慘(−{-dist_52w_high:.0f}%)")
+
+    return "、".join(parts)
+
+
+def _watchlist_verdict(signals: dict) -> str:
+    """追蹤清單 AI 建議規則(固定不變,確保每次答案一致):
+        ❌ 不建議:RSI ≥ 70 或 近5日漲 ≥ 5%
+        ✅ 可進場:(RSI ≤ 35 且現價跌破 20MA) 或 近5日跌 ≥ 5%
+        🟡 觀察:其他"""
+    if not signals.get("ok"):
+        return "—"
+    rsi_ = signals["rsi14"]
+    dist_20ma = signals["dist_20ma_pct"]
+    change_5d = signals["change_5d_pct"]
+    if rsi_ >= 70 or change_5d >= 5:
+        return "❌ 不建議"
+    if (rsi_ <= 35 and dist_20ma < 0) or change_5d <= -5:
+        return "✅ 可進場"
+    return "🟡 觀察"
+
+
+def _position_verdict(signals: dict, pnl_pct: float) -> str:
+    """股票部位 AI 建議規則(固定不變):
+        🔴 全部停利:損益 ≥ 20%
+        🟠 停利 1/2:損益 ≥ 10%
+        🟡 停利 1/4:損益 ≥ 5%
+        ❌ 考慮停損:損益 ≤ -10% 且 RSI ≥ 45(沒超賣訊號可期反彈)
+        🟢 可加碼:  損益 ≤ -5% 且 RSI ≤ 35
+        ⚠️ 警戒:    RSI ≥ 70 或 跌破 60MA
+        🔵 續抱:    其他"""
+    if not signals.get("ok"):
+        return "—"
+    rsi_ = signals["rsi14"]
+    dist_60ma = signals["dist_60ma_pct"]
+
+    if pnl_pct >= 20:
+        return "🔴 全部停利"
+    if pnl_pct >= 10:
+        return "🟠 停利 1/2"
+    if pnl_pct >= 5:
+        return "🟡 停利 1/4"
+    if pnl_pct <= -10 and rsi_ >= 45:
+        return "❌ 考慮停損"
+    if pnl_pct <= -5 and rsi_ <= 35:
+        return "🟢 可加碼"
+    if rsi_ >= 70 or dist_60ma < -5:
+        return "⚠️ 警戒"
+    return "🔵 續抱"
+
+
+def _organize_watchlist_inner() -> dict:
+    """跑追蹤清單整理,回傳 dict(不包 _envelope)。"""
+    rows = sheets.load_watchlist()
+    if rows and rows[0].get("_error"):
+        return {"error": rows[0]["_error"]}
+
+    organized_at = _now_tw_str()
+    results = []
+    for row in rows:
+        sym = str(row.get("symbol") or row.get("代號") or "").strip()
+        if not sym:
+            continue
+
+        name = str(row.get("name") or row.get("名稱") or "").strip()
+        if not name:
+            name = _lookup_stock_name(sym)
+
+        signals = _compute_signals(sym)
+        if not signals.get("ok"):
+            results.append({"symbol": sym, "name": name, "error": signals.get("error")})
+            continue
+
+        verdict = _watchlist_verdict(signals)
+        payload = {
+            "symbol":     sym,                   "代號":       sym,
+            "name":       name,                  "名稱":       name,
+            "現價":        signals["current_price"],
+            "RSI(14)":    signals["rsi14"],
+            "距20MA":      f"{signals['dist_20ma_pct']:+.2f}%",
+            "距60MA":      f"{signals['dist_60ma_pct']:+.2f}%",
+            "近5日漲跌":   f"{signals['change_5d_pct']:+.2f}%",
+            "距52週高":    f"{signals['dist_52w_high_pct']:+.2f}%",
+            "訊號摘要":    signals["summary"],
+            "AI 建議":    verdict,
+            "上次整理":    organized_at,
+        }
+        wb = sheets_writer.upsert_watchlist_item(**payload)
+
+        results.append({
+            "symbol":           sym,
+            "name":             name,
+            "current_price":    signals["current_price"],
+            "rsi14":            signals["rsi14"],
+            "dist_20ma_pct":    signals["dist_20ma_pct"],
+            "dist_60ma_pct":    signals["dist_60ma_pct"],
+            "change_5d_pct":    signals["change_5d_pct"],
+            "dist_52w_high_pct": signals["dist_52w_high_pct"],
+            "summary":          signals["summary"],
+            "verdict":          verdict,
+            "written":          bool(wb.get("ok")),
+        })
+
+    can_enter = [r for r in results if r.get("verdict", "").startswith("✅")]
+    return {
+        "ok":           True,
+        "organized_at": organized_at,
+        "n_items":      len(results),
+        "items":        results,
+        "n_can_enter":  len(can_enter),
+        "can_enter":    can_enter,
+    }
+
+
+def _organize_positions_inner(fee_rate: float, fee_min: float) -> dict:
+    """跑股票部位整理,回傳 dict(不包 _envelope)。"""
+    organized_at = _now_tw_str()
+    positions = sheets.load_positions()
+    if positions and positions[0].get("_error"):
+        return {"error": positions[0]["_error"]}
+
+    results = []
+    sum_cost = sum_market = sum_net = 0.0
+
+    for p in positions:
+        sym = str(p.get("symbol", "")).strip()
+        shares = int(p.get("shares") or 0)
+        total_cost = float(p.get("total_cost") or 0)
+        name = str(p.get("name") or "").strip() or _lookup_stock_name(sym)
+
+        if shares <= 0 or total_cost <= 0:
+            continue
+
+        signals = _compute_signals(sym)
+        if not signals.get("ok"):
+            results.append({"symbol": sym, "name": name, "error": signals.get("error")})
+            continue
+
+        price = signals["current_price"]
+        is_etf = sym.startswith("00") and len(sym) >= 4
+        tax_rate = 0.001 if is_etf else 0.003
+        gross = price * shares
+        fee = max(fee_min, gross * fee_rate)
+        tax = gross * tax_rate
+        net = gross - fee - tax
+        pnl = net - total_cost
+        pnl_pct = (pnl / total_cost * 100) if total_cost else 0
+
+        sum_cost   += total_cost
+        sum_market += gross
+        sum_net    += net
+
+        verdict = _position_verdict(signals, pnl_pct)
+        payload = {
+            "symbol":     sym,                  "代號":       sym,
+            "name":       name,                 "名稱":       name,
+            "現價":        round(price, 2),
+            "市值":        round(gross, 2),
+            "損益":        round(pnl, 2),
+            "損益%":       round(pnl_pct, 2),
+            "RSI(14)":    signals["rsi14"],
+            "距20MA":      f"{signals['dist_20ma_pct']:+.2f}%",
+            "距60MA":      f"{signals['dist_60ma_pct']:+.2f}%",
+            "近5日漲跌":   f"{signals['change_5d_pct']:+.2f}%",
+            "距52週高":    f"{signals['dist_52w_high_pct']:+.2f}%",
+            "訊號摘要":    signals["summary"],
+            "AI 建議":    verdict,
+            "上次整理":    organized_at,
+        }
+        wb = sheets_writer.upsert_position(**payload)
+
+        results.append({
+            "symbol":         sym,
+            "name":           name,
+            "shares":         shares,
+            "total_cost":     round(total_cost, 2),
+            "current_price":  round(price, 2),
+            "market_value":   round(gross, 2),
+            "net_proceeds":   round(net, 2),
+            "unrealized_pnl": round(pnl, 2),
+            "pnl_pct":        round(pnl_pct, 2),
+            "rsi14":          signals["rsi14"],
+            "dist_20ma_pct":  signals["dist_20ma_pct"],
+            "dist_60ma_pct":  signals["dist_60ma_pct"],
+            "change_5d_pct":  signals["change_5d_pct"],
+            "dist_52w_high_pct": signals["dist_52w_high_pct"],
+            "summary":        signals["summary"],
+            "verdict":        verdict,
+            "written":        bool(wb.get("ok")),
+        })
+
+    return {
+        "ok":           True,
+        "organized_at": organized_at,
+        "n_positions":  len(results),
+        "positions":    results,
+        "summary": {
+            "total_cost":    round(sum_cost, 2),
+            "total_market":  round(sum_market, 2),
+            "total_net":     round(sum_net, 2),
+            "total_pnl":     round(sum_net - sum_cost, 2),
+            "total_pnl_pct": round((sum_net - sum_cost) / sum_cost * 100, 2) if sum_cost else 0,
+        },
+    }
+
+
+@tool(
+    "organize_watchlist",
+    "**「整理一下追蹤清單」一鍵工作流** — 對「追蹤清單」每一檔自動抓 K 線、算 5 個技術訊號"
+    "(RSI / 距20MA / 距60MA / 近5日漲跌 / 距52週高)、寫白話訊號摘要 + AI 建議"
+    "(✅ 可進場 / 🟡 觀察 / ❌ 不建議),全部寫回 Sheet 對應 row。"
+    "使用者說「整理一下」「我的觀察清單怎樣」「追蹤的股票看一下」「最近哪些可以買」用這個。"
+    "回傳每檔明細 + can_enter(✅ 可進場的子集)。把 can_enter 列在最上面給使用者看,"
+    "Markdown 表呈現:代號 / 名稱 / 現價 / 訊號摘要 / AI 建議。",
+    {"type": "object", "properties": {}, "required": []},
+)
+async def organize_watchlist(args: dict) -> dict:
+    return _envelope(_organize_watchlist_inner())
+
+
+@tool(
+    "organize_positions",
+    "**「整理一下我的部位」一鍵工作流** — 對「股票部位」每一檔抓即時價 + 算市值/損益/損益% + "
+    "跑 5 個技術訊號 + 寫白話訊號摘要 + AI 建議(🔴 全部停利 / 🟠 停利 1/2 / 🟡 停利 1/4 / "
+    "🟢 可加碼 / ❌ 考慮停損 / ⚠️ 警戒 / 🔵 續抱),全部寫回 Sheet。"
+    "使用者說「整理一下我的部位」「我的股票怎樣」「我該動哪些」「該不該停利」用這個。"
+    "回傳每檔明細 + summary(總成本/市值/損益)。把需要動作的列(🔴/🟠/🟡/❌)提到最上面,"
+    "Markdown 表呈現:代號 / 名稱 / 損益% / 訊號摘要 / AI 建議。",
+    {
+        "type": "object",
+        "properties": {
+            "fee_rate": {"type": "number", "description": "選填 override 手續費率"},
+            "fee_min":  {"type": "number", "description": "選填 override 手續費下限"},
+        },
+        "required": [],
+    },
+)
+async def organize_positions(args: dict) -> dict:
+    fee_rate = float((args or {}).get("fee_rate")
+                     or os.getenv("USER_FEE_RATE", "0.001425"))
+    fee_min  = float((args or {}).get("fee_min")
+                     or os.getenv("USER_FEE_MIN", "1"))
+    return _envelope(_organize_positions_inner(fee_rate, fee_min))
+
+
+@tool(
+    "organize_all",
+    "**「整理一下」終極一鍵** — 同時整理股票部位 + 追蹤清單。"
+    "使用者單獨說「整理一下」「整理」「幫我看一下」(沒指明部位還是追蹤)時直接用這個。"
+    "回傳 positions(股票部位整理結果)+ watchlist(追蹤清單整理結果),"
+    "請分兩段 Markdown 表呈現:先股票部位(需要動作的提到最上),"
+    "再追蹤清單(✅ 可進場的提到最上)。",
+    {"type": "object", "properties": {}, "required": []},
+)
+async def organize_all(args: dict) -> dict:
+    fee_rate = float(os.getenv("USER_FEE_RATE", "0.001425"))
+    fee_min  = float(os.getenv("USER_FEE_MIN", "1"))
+    pos = _organize_positions_inner(fee_rate, fee_min)
+    wl  = _organize_watchlist_inner()
+    return _envelope({
+        "ok":         True,
+        "positions":  pos,
+        "watchlist":  wl,
+    })
+
+
 @tool(
     "ping_sheets_writer",
     "測試 Apps Script Web App 是否能正常呼叫。回傳 {ok: true, pong: 時間戳} 代表通了。"
@@ -2033,8 +2337,10 @@ ALL_TOOLS = [
     sync_portfolio_from_trades,
     get_realized_pnl,
     record_etf_snapshot,
-    add_to_watchlist,
     get_watchlist,
+    organize_watchlist,
+    organize_positions,
+    organize_all,
     compute_target_sell_prices,
     ping_sheets_writer,
     get_us_quote,

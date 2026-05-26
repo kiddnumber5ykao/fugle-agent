@@ -104,6 +104,13 @@ def add_watchlist_item(**fields) -> dict:
     return _post("add_watchlist_item", fields)
 
 
+def upsert_watchlist_item(**fields) -> dict:
+    """新增 / 更新「追蹤清單」分頁(以 symbol 為 key)。
+    organize_watchlist 用這個把計算好的 RSI / 距20MA /...等訊號 +
+    訊號摘要 + AI 建議寫進既有 row。row 不存在則 append。"""
+    return _post("upsert_watchlist_item", fields)
+
+
 def delete_watchlist_item(symbol: str) -> dict:
     return _post("delete_watchlist_item", {"symbol": symbol})
 
