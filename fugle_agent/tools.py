@@ -2984,6 +2984,8 @@ async def organize_all_technical(args: dict) -> dict:
     organized_at = _now_tw_str()
     fee_rate = float(os.getenv("USER_FEE_RATE", "0.001425"))
     fee_min  = float(os.getenv("USER_FEE_MIN", "1"))
+    # 先確保股票部位從股票交易同步好(沒部位的話技術分析無從跑起)
+    sync_res = sheets_writer.manual_sync()
     pos = _organize_v2_positions(do_fundamentals=False,
                                   organized_at=organized_at,
                                   fee_rate=fee_rate, fee_min=fee_min)
@@ -2992,6 +2994,7 @@ async def organize_all_technical(args: dict) -> dict:
         "ok":           True,
         "deep":         False,
         "organized_at": organized_at,
+        "sync":         sync_res,
         "positions":    pos,
         "watchlist":    wl,
     })
@@ -3010,6 +3013,8 @@ async def organize_all_deep(args: dict) -> dict:
     organized_at = _now_tw_str()
     fee_rate = float(os.getenv("USER_FEE_RATE", "0.001425"))
     fee_min  = float(os.getenv("USER_FEE_MIN", "1"))
+    # 先同步股票部位
+    sync_res = sheets_writer.manual_sync()
     pos = _organize_v2_positions(do_fundamentals=True,
                                   organized_at=organized_at,
                                   fee_rate=fee_rate, fee_min=fee_min)
@@ -3018,6 +3023,7 @@ async def organize_all_deep(args: dict) -> dict:
         "ok":           True,
         "deep":         True,
         "organized_at": organized_at,
+        "sync":         sync_res,
         "positions":    pos,
         "watchlist":    wl,
     })
