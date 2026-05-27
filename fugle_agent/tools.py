@@ -2041,45 +2041,51 @@ def _compute_signals(sym: str) -> dict:
 
 def _signal_summary_zh(rsi14, dist_20ma, dist_60ma, change_5d, dist_52w_high,
                         high_window_label="一年") -> str:
-    """把訊號翻譯成白話。dist_60ma 可以是 None(資料不足時)。"""
+    """白話訊號摘要,**每段都明確標時間框架**,讓使用者知道是「近兩週」還是「這週」。
+    dist_60ma 可以是 None(資料不足時)。"""
     parts = []
+    # RSI(14) → 「近兩週」買賣強弱
     if rsi14 >= 70:
-        parts.append("大家在搶買、可能過熱")
+        parts.append("近兩週買方主導、可能過熱")
     elif rsi14 >= 55:
-        parts.append("買的人較多")
+        parts.append("近兩週買的人較多")
     elif rsi14 >= 45:
-        parts.append("買賣勢均力敵")
+        parts.append("近兩週買賣勢均力敵")
     elif rsi14 >= 30:
-        parts.append("賣的人較多")
+        parts.append("近兩週賣的人較多")
     else:
-        parts.append("大家都在賣、可能殺過頭")
+        parts.append("近兩週賣方主導、可能殺過頭")
 
+    # 距 20MA → 「短期 20 日內」價格位置
     if dist_20ma < -3:
-        parts.append("短期跌深")
+        parts.append("短期(20日)跌深")
     elif dist_20ma < 0:
-        parts.append("短期跌破均線")
+        parts.append("短期(20日)跌破均線")
     elif dist_20ma <= 3:
-        parts.append("貼近短期均線")
+        parts.append("貼近 20 日均線")
     else:
-        parts.append("短期漲很多")
+        parts.append("短期(20日)強勢")
 
+    # 距 60MA → 「中期 60 日內」價格位置
     if dist_60ma is not None:
         if dist_60ma < -5:
-            parts.append("中期趨勢已壞")
+            parts.append("中期(60日)趨勢已壞")
         elif dist_60ma < 0:
-            parts.append("中期略弱")
+            parts.append("中期(60日)略弱")
 
+    # 近 5 日 → 「這週」
     if change_5d <= -5:
-        parts.append(f"這週跌很慘({change_5d:.1f}%)")
+        parts.append(f"這週跌得多({change_5d:.1f}%)")
     elif change_5d <= -2:
-        parts.append(f"最近在跌({change_5d:.1f}%)")
+        parts.append(f"這週在跌({change_5d:.1f}%)")
     elif change_5d >= 5:
-        parts.append(f"這週漲很多(+{change_5d:.1f}%)")
+        parts.append(f"這週漲得多(+{change_5d:.1f}%)")
     elif change_5d >= 2:
-        parts.append(f"最近在漲(+{change_5d:.1f}%)")
+        parts.append(f"這週在漲(+{change_5d:.1f}%)")
     else:
-        parts.append("最近價格沒什麼動")
+        parts.append("這週價格沒什麼動")
 
+    # 距 52 週高 → 「{一年/近 N 日}」相對位置
     if dist_52w_high >= -3:
         parts.append(f"貼近{high_window_label}新高")
     elif dist_52w_high >= -10:
@@ -2092,53 +2098,93 @@ def _signal_summary_zh(rsi14, dist_20ma, dist_60ma, change_5d, dist_52w_high,
     return "、".join(parts)
 
 
-def _watchlist_verdict(signals: dict) -> str:
-    """追蹤清單 AI 建議規則(對齊使用者 USER_CONTEXT「跌到位 = 進場機會」邏輯):
-        ❌ 暫不:        RSI ≥ 70 或 近 5 日漲 ≥ 5%(過熱、追高風險)
-        🟢 進場機會:    (RSI ≤ 35 且現價跌破 20MA) 或 近 5 日跌 ≥ 5%(技術超賣)
-        🟡 觀察:        其他"""
+def _outlook_verdict(signals: dict) -> str:
+    """**純技術面、前瞻性的展望分析** — 看「接下來這檔還有沒有戲」,跟使用者的損益/成本
+    完全脫鉤。股票部位、追蹤清單共用同一套邏輯。
+
+    採「動能(momentum)」框架,不採「均值回歸」 — 訊號偏空就回 🔴 看衰(不會反過來說
+    跌深 = 進場機會)。
+
+    給三燈號:
+        🟢 看好 — 價格在往上走、買的人多、最近漲得不錯
+        🟡 中性 — 沒明顯方向、上下都有可能、訊號混雜
+        🔴 看衰 — 價格在往下走、賣的人多、最近跌得不少
+
+    使用者拿這個 + 自己的損益,**自己**判斷要不要動。"""
     if not signals.get("ok"):
         return "—"
+
+    score = 0
     rsi_ = signals["rsi14"]
     dist_20ma = signals["dist_20ma_pct"]
-    change_5d = signals["change_5d_pct"]
-    if rsi_ >= 70 or change_5d >= 5:
-        return "❌ 暫不"
-    if (rsi_ <= 35 and dist_20ma < 0) or change_5d <= -5:
-        return "🟢 進場機會"
-    return "🟡 觀察"
-
-
-def _position_verdict(signals: dict, pnl_pct: float) -> str:
-    """股票部位 AI 建議規則(對齊使用者 USER_CONTEXT 的 5/10/15/20% 分階段獲利策略):
-        🚨 立刻出場:   損益 ≥ 20%(20% 是天花板,不貪)
-        🔴 強烈建議出場:損益 ≥ 15%
-        🟠 建議出場:   損益 ≥ 10%
-        🟡 可考慮出場: 損益 ≥ 5%
-        ❌ 考慮停損:   損益 ≤ -10% 且 RSI ≥ 45(沒超賣訊號可期反彈)
-        🟢 可加碼:     損益 ≤ -5% 且 RSI ≤ 35(跌深 + 超賣可加碼壓低成本)
-        ⚠️ 警戒:       RSI ≥ 70 或 跌破 60MA(過熱或趨勢轉壞)
-        🔵 續抱:       其他"""
-    if not signals.get("ok"):
-        return "—"
-    rsi_ = signals["rsi14"]
     dist_60ma = signals["dist_60ma_pct"]
+    change_5d = signals["change_5d_pct"]
+    dist_52w = signals["dist_52w_high_pct"]
 
-    if pnl_pct >= 20:
-        return "🚨 立刻出場"
-    if pnl_pct >= 15:
-        return "🔴 強烈建議出場"
-    if pnl_pct >= 10:
-        return "🟠 建議出場"
-    if pnl_pct >= 5:
-        return "🟡 可考慮出場"
-    if pnl_pct <= -10 and rsi_ >= 45:
-        return "❌ 考慮停損"
-    if pnl_pct <= -5 and rsi_ <= 35:
-        return "🟢 可加碼"
-    if rsi_ >= 70 or (dist_60ma is not None and dist_60ma < -5):
-        return "⚠️ 警戒"
-    return "🔵 續抱"
+    # ── RSI (近兩週買賣強弱) — 動能視角 ──────────────────
+    if rsi_ >= 60:
+        score += 2
+    elif rsi_ >= 50:
+        score += 1
+    elif rsi_ >= 40:
+        score += 0           # 中性
+    elif rsi_ >= 30:
+        score -= 1
+    else:
+        score -= 2           # 賣方主導
+
+    # ── 短期均線 20MA 位置 ───────────────────────────────
+    if dist_20ma >= 3:
+        score += 2
+    elif dist_20ma >= 0:
+        score += 1
+    elif dist_20ma >= -3:
+        score -= 1
+    else:
+        score -= 2
+
+    # ── 中期均線 60MA 位置(資料夠才看) ──────────────────
+    if dist_60ma is not None:
+        if dist_60ma >= 5:
+            score += 2
+        elif dist_60ma >= 0:
+            score += 1
+        elif dist_60ma >= -5:
+            score -= 1
+        else:
+            score -= 2
+
+    # ── 5 日動能 ──────────────────────────────────────────
+    if change_5d >= 5:
+        score += 2
+    elif change_5d >= 2:
+        score += 1
+    elif change_5d <= -5:
+        score -= 2
+    elif change_5d <= -2:
+        score -= 1
+
+    # ── 距 52 週高(相對強弱) ────────────────────────────
+    if dist_52w >= -5:
+        score += 1
+    elif dist_52w >= -15:
+        score += 0
+    elif dist_52w >= -25:
+        score -= 1
+    else:
+        score -= 2
+
+    # ── Score 範圍約 -9 ~ +9,翻譯成三燈號 ─────────────
+    if score >= 4:
+        return "🟢 看好"
+    if score >= -1:
+        return "🟡 中性"
+    return "🔴 看衰"
+
+
+# 保留舊名稱當 alias,避免其他地方 import 壞掉
+_watchlist_verdict = _outlook_verdict
+_position_verdict = lambda signals, pnl_pct=None: _outlook_verdict(signals)
 
 
 def _fmt_pct(v) -> str:
@@ -2363,6 +2409,620 @@ async def organize_all(args: dict) -> dict:
     })
 
 
+# =============================================================================
+# 🎯 短線分析工作流 v2 — 技術面 + 基本面雙軌設計 (5 燈號 + 綜合建議)
+# =============================================================================
+# 觸發詞:
+#   「整體技術分析」→ organize_all_technical(只跑技術,30~60 秒)
+#   「整體深度分析」→ organize_all_deep   (技術 + 基本面,15~25 分)
+# =============================================================================
+
+def _compute_short_signals(sym: str) -> dict:
+    """短線版的訊號計算 — 對單一代號抓 K 線 + 量,
+    產出 6 段白話描述 + 內部數值給 2 個技術燈號計算用。"""
+    try:
+        to_dt = datetime.now()
+        from_dt = to_dt - timedelta(days=400)
+        data = _client.candles(sym,
+                                from_date=from_dt.strftime("%Y-%m-%d"),
+                                to_date=to_dt.strftime("%Y-%m-%d"))
+        bars = data.get("data", [])
+        if len(bars) < 7:
+            return {"ok": False, "mode": _client.mode,
+                    "error": f"K 線只 {len(bars)} 根、不夠分析"}
+        closes = [b["close"] for b in bars]
+        volumes = [b.get("volume", 0) for b in bars]
+
+        current = closes[-1]
+        try:
+            q = _client.quote(sym)
+            for k in ("lastPrice", "closePrice", "price", "referencePrice", "previousClose"):
+                v = q.get(k) if isinstance(q, dict) else None
+                if v:
+                    current = float(v)
+                    break
+        except Exception:
+            pass
+
+        # 1) 今天表現
+        prev_close = closes[-2] if len(closes) >= 2 else current
+        today_change_pct = (current / prev_close - 1) * 100 if prev_close else 0
+        today_vol = volumes[-1] if volumes else 0
+        avg_vol_20 = (sum(volumes[-20:]) / min(len(volumes), 20)) if volumes else 0
+        vol_ratio_today = (today_vol / avg_vol_20) if avg_vol_20 else 1.0
+        if vol_ratio_today >= 1.8:
+            vol_phrase = f"量比平常大 {vol_ratio_today:.1f} 倍"
+        elif vol_ratio_today >= 1.3:
+            vol_phrase = f"量稍大 ({vol_ratio_today:.1f} 倍)"
+        elif vol_ratio_today <= 0.5:
+            vol_phrase = "量很小"
+        elif vol_ratio_today <= 0.8:
+            vol_phrase = "量稍小"
+        else:
+            vol_phrase = "量正常"
+        if today_change_pct >= 2:
+            today_desc = f"今天漲 +{today_change_pct:.1f}%、{vol_phrase}"
+        elif today_change_pct >= 0.5:
+            today_desc = f"今天微漲 +{today_change_pct:.1f}%、{vol_phrase}"
+        elif today_change_pct >= -0.5:
+            today_desc = f"今天平盤、{vol_phrase}"
+        elif today_change_pct >= -2:
+            today_desc = f"今天微跌 {today_change_pct:.1f}%、{vol_phrase}"
+        else:
+            today_desc = f"今天跌 {today_change_pct:.1f}%、{vol_phrase}"
+
+        # 2) 最近 3 天
+        change_3d_pct = (current / closes[-4] - 1) * 100 if len(closes) >= 4 else 0
+        if change_3d_pct >= 4:
+            last3d_desc = f"連 3 天紅、漲了 +{change_3d_pct:.1f}%"
+        elif change_3d_pct >= 1:
+            last3d_desc = f"3 天上漲 +{change_3d_pct:.1f}%"
+        elif change_3d_pct >= -1:
+            last3d_desc = "3 天內漲跌互見、沒明顯方向"
+        elif change_3d_pct >= -4:
+            last3d_desc = f"3 天下跌 {change_3d_pct:.1f}%"
+        else:
+            last3d_desc = f"連 3 天黑、跌了 {change_3d_pct:.1f}%"
+
+        # 3) 這週氛圍 (RSI7)
+        rsi7 = rsi(closes, 7)[-1] if len(closes) >= 8 else 50
+        if rsi7 >= 70:
+            mood_desc = "最近一週很多人搶買、可能太熱"
+        elif rsi7 >= 55:
+            mood_desc = "最近一週買的人較多"
+        elif rsi7 >= 45:
+            mood_desc = "最近一週買賣勢均力敵"
+        elif rsi7 >= 30:
+            mood_desc = "最近一週賣的人較多"
+        else:
+            mood_desc = "最近一週很多人在拋售、可能跌過頭"
+
+        # 4) 近 10 天走勢 (MA10)
+        ma10 = sum(closes[-10:]) / 10 if len(closes) >= 10 else sum(closes) / len(closes)
+        dist_ma10_pct = (current / ma10 - 1) * 100 if ma10 else 0
+        if dist_ma10_pct >= 3:
+            ma10_desc = f"過去 10 天在漲、目前比平均高 {dist_ma10_pct:.1f}%"
+        elif dist_ma10_pct >= 0:
+            ma10_desc = f"過去 10 天溫和、目前略高於平均 (+{dist_ma10_pct:.1f}%)"
+        elif dist_ma10_pct >= -3:
+            ma10_desc = f"過去 10 天小弱、目前略低於平均 ({dist_ma10_pct:.1f}%)"
+        else:
+            ma10_desc = f"過去 10 天跌深、目前比平均低 {-dist_ma10_pct:.1f}%"
+
+        # 5) 量能變化 (近 5 vs 過去 20)
+        avg_vol_5 = (sum(volumes[-5:]) / 5) if len(volumes) >= 5 else (sum(volumes)/len(volumes) if volumes else 0)
+        avg_vol_20_full = (sum(volumes[-20:]) / 20) if len(volumes) >= 20 else (sum(volumes)/len(volumes) if volumes else 0)
+        vol_ratio_5_20 = (avg_vol_5 / avg_vol_20_full) if avg_vol_20_full else 1.0
+        if vol_ratio_5_20 >= 1.5:
+            if change_3d_pct >= 0:
+                vol_change_desc = f"近 5 天明顯放量上漲、有人積極買進 ({vol_ratio_5_20:.1f} 倍)"
+            else:
+                vol_change_desc = f"近 5 天放量下跌、賣壓重 ({vol_ratio_5_20:.1f} 倍)"
+        elif vol_ratio_5_20 >= 1.2:
+            vol_change_desc = f"近 5 天量稍多、有資金進出 ({vol_ratio_5_20:.1f} 倍)"
+        elif vol_ratio_5_20 <= 0.6:
+            vol_change_desc = "近 5 天明顯縮量、市場關注度低"
+        elif vol_ratio_5_20 <= 0.8:
+            vol_change_desc = "近 5 天量稍少、觀望氣氛重"
+        else:
+            vol_change_desc = "量能正常、沒明顯變化"
+
+        # 6) 離 20 天高/低點
+        window20 = closes[-20:] if len(closes) >= 20 else closes
+        high20 = max(window20)
+        low20 = min(window20)
+        dist_high20_pct = (current / high20 - 1) * 100 if high20 else 0
+        dist_low20_pct = (current / low20 - 1) * 100 if low20 else 0
+        if dist_high20_pct >= -2:
+            range20_desc = "快摸到 20 天內最高點"
+        elif dist_high20_pct >= -5:
+            range20_desc = f"離 20 天最高點 {-dist_high20_pct:.1f}%"
+        elif dist_low20_pct <= 2:
+            range20_desc = "貼近 20 天內最低點"
+        elif dist_low20_pct <= 5:
+            range20_desc = f"接近 20 天最低點 (距底 +{dist_low20_pct:.1f}%)"
+        else:
+            range20_desc = (f"在 20 天區間中段 (距高 {dist_high20_pct:.1f}%、"
+                            f"距低 +{dist_low20_pct:.1f}%)")
+
+        return {
+            "ok":               True,
+            "mode":             _client.mode,
+            "n_bars":           len(bars),
+            "current_price":    round(current, 2),
+            # White-language descriptions
+            "today_desc":       today_desc,
+            "last3d_desc":      last3d_desc,
+            "weekly_mood_desc": mood_desc,
+            "ma10_desc":        ma10_desc,
+            "volume_desc":      vol_change_desc,
+            "range20_desc":     range20_desc,
+            # Raw numbers for verdict
+            "today_change_pct": today_change_pct,
+            "today_vol_ratio":  vol_ratio_today,
+            "change_3d_pct":    change_3d_pct,
+            "rsi7":             rsi7,
+            "dist_ma10_pct":    dist_ma10_pct,
+            "vol_ratio_5_20":   vol_ratio_5_20,
+            "dist_high20_pct":  dist_high20_pct,
+            "dist_low20_pct":   dist_low20_pct,
+        }
+    except Exception as e:
+        return {"ok": False, "mode": getattr(_client, "mode", "unknown"),
+                "error": f"{type(e).__name__}: {e}"}
+
+
+def _short_term_light(signals: dict) -> str:
+    """短線燈號 (A) — 5-10 天視角 — 用 RSI7 + MA10 + 3 天動能 + 20 天區間位置。"""
+    if not signals.get("ok"):
+        return "—"
+    score = 0
+    r = signals["rsi7"]
+    if   r >= 60: score += 2
+    elif r >= 50: score += 1
+    elif r >= 40: score += 0
+    elif r >= 30: score -= 1
+    else:         score -= 2
+    m = signals["dist_ma10_pct"]
+    if   m >= 3:  score += 2
+    elif m >= 0:  score += 1
+    elif m >= -3: score -= 1
+    else:         score -= 2
+    c = signals["change_3d_pct"]
+    if   c >= 4:  score += 2
+    elif c >= 1:  score += 1
+    elif c <= -4: score -= 2
+    elif c <= -1: score -= 1
+    dh = signals["dist_high20_pct"]
+    dl = signals["dist_low20_pct"]
+    if dh >= -3:  score += 1
+    elif dl <= 3: score -= 1
+    if score >= 3:  return "🟢 看好"
+    if score >= -1: return "🟡 中性"
+    return "🔴 看衰"
+
+
+def _super_short_term_light(signals: dict) -> str:
+    """超短線燈號 (B) — 2-5 天視角 — 重今天表現 + 量 + 3 天動能。"""
+    if not signals.get("ok"):
+        return "—"
+    score = 0
+    t = signals["today_change_pct"]
+    if   t >= 2:    score += 2
+    elif t >= 0.5:  score += 1
+    elif t <= -2:   score -= 2
+    elif t <= -0.5: score -= 1
+    vr = signals.get("today_vol_ratio", 1.0)
+    if vr >= 1.5 and t > 0:  score += 1
+    elif vr >= 1.5 and t < 0: score -= 1
+    c = signals["change_3d_pct"]
+    if   c >= 3:  score += 2
+    elif c >= 1:  score += 1
+    elif c <= -3: score -= 2
+    elif c <= -1: score -= 1
+    vc = signals["vol_ratio_5_20"]
+    if vc >= 1.5 and c > 0:  score += 1
+    elif vc >= 1.5 and c < 0: score -= 1
+    if score >= 3:  return "🟢 看好"
+    if score >= -1: return "🟡 中性"
+    return "🔴 看衰"
+
+
+def _fetch_fundamentals(sym: str, name: str) -> dict:
+    """用 Anthropic API + web_search 抓基本面 5 項 + 計算分數。
+    沒設 ANTHROPIC_API_KEY 或失敗時回 ok=False。"""
+    api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        return {"ok": False, "error": "ANTHROPIC_API_KEY 未設"}
+    try:
+        from anthropic import Anthropic
+    except ImportError:
+        return {"ok": False, "error": "anthropic SDK 未安裝"}
+
+    client = Anthropic()
+    model = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+
+    prompt = (
+        f"請用 web_search 工具查詢台股 {sym} {name}(如果代號未知名稱就忽略名稱),"
+        "並彙整資訊。**只回 JSON**(前後不要任何文字、不要 code fence),格式:\n\n"
+        "{\n"
+        '  "estimate": "估值描述 (白話,含本益比數字,例:便宜 — 投資人現在花 12 元就能買到公司賺 1 元的能力)",\n'
+        '  "estimate_score": -2 到 +2 整數 (本益比<15→2, 15-20→1, 20-25→0, 25-30→-1, >30→-2),\n'
+        '  "dividend": "配息描述 (例:配息大方、殖利率 4.5%)",\n'
+        '  "dividend_score": -1 到 +2 整數 (殖利率<1%→-1, 1-3%→0, 3-5%→1, >5%→2),\n'
+        '  "revenue": "營收動能描述 (例:公司營收強勁成長、比去年同月多 25%)",\n'
+        '  "revenue_score": -2 到 +2 整數 (依年增率<-10/-10~0/0~10/10~25/>25),\n'
+        '  "institutional": "法人籌碼描述 (例:連 5 天外資都在買、買超 1 萬張)",\n'
+        '  "institutional_score": -2 到 +2 整數 (連續賣超→-2, 賣超→-1, 持平→0, 買超→1, 大買→2),\n'
+        '  "news": "近期 1-2 週新聞重點 (例:利多:拿到 AI 大單)",\n'
+        '  "news_score": -2 到 +2 整數 (重大利空→-2, 利空→-1, 中性→0, 利多→1, 重大利多→2)\n'
+        "}\n\n"
+        "**重要**:用白話描述、不要術語。某項查不到資料就設為「資料不足」+ score=0。"
+    )
+
+    try:
+        resp = client.messages.create(
+            model=model,
+            max_tokens=2000,
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 4}],
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = ""
+        for block in resp.content:
+            if hasattr(block, "text") and block.text:
+                text += block.text
+        text = text.strip()
+        # Strip markdown code fence if present
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(lines[1:-1] if lines[-1].strip().startswith("```") else lines[1:])
+        data = json.loads(text.strip())
+        return {
+            "ok":                  True,
+            "estimate":            str(data.get("estimate", "資料不足")),
+            "dividend":            str(data.get("dividend", "資料不足")),
+            "revenue":             str(data.get("revenue", "資料不足")),
+            "institutional":       str(data.get("institutional", "資料不足")),
+            "news":                str(data.get("news", "資料不足")),
+            "estimate_score":      int(data.get("estimate_score", 0) or 0),
+            "dividend_score":      int(data.get("dividend_score", 0) or 0),
+            "revenue_score":       int(data.get("revenue_score", 0) or 0),
+            "institutional_score": int(data.get("institutional_score", 0) or 0),
+            "news_score":          int(data.get("news_score", 0) or 0),
+        }
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _company_light_v2(fund: dict) -> str:
+    """公司面燈號 — 估值 + 配息 + 營收。"""
+    if not fund.get("ok"):
+        return "—"
+    score = fund["estimate_score"] + fund["dividend_score"] + fund["revenue_score"]
+    if score >= 3:  return "🟢 強"
+    if score >= -1: return "🟡 平淡"
+    return "🔴 弱"
+
+
+def _chips_light_v2(fund: dict) -> str:
+    """籌碼面燈號 — 法人籌碼 + 新聞。"""
+    if not fund.get("ok"):
+        return "—"
+    score = fund["institutional_score"] + fund["news_score"]
+    if score >= 2:  return "🟢 強"
+    if score >= -1: return "🟡 平淡"
+    return "🔴 弱"
+
+
+def _combined_advice(short_light: str, super_short_light: str,
+                     chips_light: str, company_light: str,
+                     is_position: bool) -> str:
+    """根據 4 個燈號給綜合建議文字。沒有基本面 (—) 時,只用技術版本。"""
+    def _e(light: str) -> str:
+        if "🟢" in light: return "🟢"
+        if "🟡" in light: return "🟡"
+        if "🔴" in light: return "🔴"
+        return "—"
+    s, ss, ch, co = _e(short_light), _e(super_short_light), _e(chips_light), _e(company_light)
+
+    # 沒有基本面(只跑技術)→ 簡化版
+    if ch == "—" and co == "—":
+        if s == "🟢" and ss == "🟢":
+            return "🟢 短期看好(基本面待補,請說「整體深度分析」)"
+        if s == "🔴" and ss == "🔴":
+            return "🔴 短期看衰(基本面待補)"
+        if s == "🟡" and ss == "🟡":
+            return "🟡 技術中性、再等等"
+        if s == "🟢" and ss == "🔴":
+            return "🟡 中期看好但超短線轉弱、觀察 1-2 天"
+        if s == "🔴" and ss == "🟢":
+            return "🟡 中期看衰但超短線在反彈、觀察是否站穩"
+        return "🟡 技術訊號混合、再等等"
+
+    # 有基本面 → 4 燈號矩陣
+    if s == "🟢" and ss == "🟢":
+        tech_key = "🟢"
+    elif s == "🔴" and ss == "🔴":
+        tech_key = "🔴"
+    elif s == "🟢" and ss == "🔴":
+        tech_key = "↘"
+    elif s == "🔴" and ss == "🟢":
+        tech_key = "↗"
+    else:
+        tech_key = "🟡"
+
+    score_map = {"🟢": 1, "🟡": 0, "🔴": -1, "—": 0}
+    f_score = score_map[ch] + score_map[co]
+    if f_score >= 1:    fund_key = "🟢"
+    elif f_score <= -1: fund_key = "🔴"
+    else:               fund_key = "🟡"
+
+    if is_position:
+        matrix = {
+            ("🟢", "🟢"): "🟢 短長線都好,可放心抱、可加碼",
+            ("🟢", "🟡"): "🟢 短線看好、別貪太久(無長線 backup)",
+            ("🟢", "🔴"): "🟡 小心追,可能是反彈陷阱",
+            ("🟡", "🟢"): "🟡 等技術轉好、長線基本面 OK",
+            ("🟡", "🟡"): "🟡 再等等、沒明顯訊號",
+            ("🟡", "🔴"): "🔴 沒理由抱、考慮先獲利了結",
+            ("🔴", "🟢"): "🟡 短線弱但長線好、觀察止跌",
+            ("🔴", "🟡"): "🔴 沒理由抱、考慮停利停損",
+            ("🔴", "🔴"): "🔴 盡快出場、雙弱沒戲",
+            ("↘", "🟢"): "🟡 中期好但短線轉弱、先觀察 1-2 天",
+            ("↘", "🟡"): "🟡 中期好但短線轉弱、可考慮先停利一部分",
+            ("↘", "🔴"): "🔴 中期好但短線+基本面轉弱、考慮減碼",
+            ("↗", "🟢"): "🟡 中期差但短線反彈+長線好、可觀察",
+            ("↗", "🟡"): "🟡 中期差但短線反彈、空間有限",
+            ("↗", "🔴"): "🔴 中期差又無長線支撐、反彈別追",
+        }
+    else:
+        matrix = {
+            ("🟢", "🟢"): "🟢 短長線都看好、可考慮進場",
+            ("🟢", "🟡"): "🟢 短線可進、別久抱",
+            ("🟢", "🔴"): "🟡 小心、可能是反彈陷阱",
+            ("🟡", "🟢"): "🟡 等技術轉好再進、長線 OK",
+            ("🟡", "🟡"): "🟡 再等等、沒明顯訊號",
+            ("🟡", "🔴"): "🔴 不用進、不值得",
+            ("🔴", "🟢"): "🟡 短線弱、若止跌可低接",
+            ("🔴", "🟡"): "🔴 短線弱、不用進",
+            ("🔴", "🔴"): "🔴 雙弱、不用進",
+            ("↘", "🟢"): "🟡 中期看好但短線轉弱、等止穩",
+            ("↘", "🟡"): "🟡 中期看好但短線弱、觀察",
+            ("↘", "🔴"): "🔴 雙弱、不用進",
+            ("↗", "🟢"): "🟡 短線反彈+長線好、觀察站穩",
+            ("↗", "🟡"): "🟡 短線反彈但中期弱、小心追",
+            ("↗", "🔴"): "🔴 反彈無支撐、不要追",
+        }
+    return matrix.get((tech_key, fund_key), "🟡 訊號不明、再等等")
+
+
+def _organize_v2_positions(do_fundamentals: bool, organized_at: str,
+                            fee_rate: float, fee_min: float) -> dict:
+    """跑股票部位的整理 — 寫回 v2 schema 欄位。"""
+    positions = sheets.load_positions()
+    if positions and positions[0].get("_error"):
+        return {"error": positions[0]["_error"]}
+
+    results = []
+    n_ok = n_fail = 0
+    for p in positions:
+        sym = str(p.get("symbol", "")).strip()
+        shares = int(p.get("shares") or 0)
+        total_cost = float(p.get("total_cost") or 0)
+        name = str(p.get("name") or "").strip() or _lookup_stock_name(sym)
+        if shares <= 0 or total_cost <= 0:
+            continue
+
+        signals = _compute_short_signals(sym)
+        if not signals.get("ok"):
+            n_fail += 1
+            results.append({"symbol": sym, "name": name, "error": signals.get("error")})
+            continue
+
+        price = signals["current_price"]
+        is_etf = sym.startswith("00") and len(sym) >= 4
+        tax_rate = 0.001 if is_etf else 0.003
+        gross = price * shares
+        fee = max(fee_min, gross * fee_rate)
+        tax = gross * tax_rate
+        net = gross - fee - tax
+        pnl = net - total_cost
+        pnl_pct = (pnl / total_cost * 100) if total_cost else 0
+
+        short_light = _short_term_light(signals)
+        super_light = _super_short_term_light(signals)
+
+        fund_payload = {}
+        chips_light = "—"
+        company_light = "—"
+        if do_fundamentals:
+            fd = _fetch_fundamentals(sym, name)
+            if fd.get("ok"):
+                chips_light = _chips_light_v2(fd)
+                company_light = _company_light_v2(fd)
+                fund_payload = {
+                    "估值":           fd["estimate"],
+                    "配息":           fd["dividend"],
+                    "營收動能":        fd["revenue"],
+                    "法人籌碼":        fd["institutional"],
+                    "近期新聞重點":    fd["news"],
+                    "籌碼面燈號":      chips_light,
+                    "公司面燈號":      company_light,
+                    "基本面整理時間":   organized_at,
+                }
+
+        advice = _combined_advice(short_light, super_light, chips_light, company_light,
+                                   is_position=True)
+
+        payload = {
+            "symbol": sym,    "代號": sym,
+            "name":   name,   "名稱": name,
+            "現價":            round(price, 2),
+            "市值":            round(gross, 2),
+            "損益":            round(pnl, 2),
+            "損益%":           round(pnl_pct, 2),
+            "今天表現":         signals["today_desc"],
+            "最近3天":          signals["last3d_desc"],
+            "這週氛圍":         signals["weekly_mood_desc"],
+            "近10天走勢":       signals["ma10_desc"],
+            "量能變化":         signals["volume_desc"],
+            "離20天高低":       signals["range20_desc"],
+            "短線燈號":         short_light,
+            "超短線燈號":       super_light,
+            "技術整理時間":     organized_at,
+            "綜合建議":         advice,
+            **fund_payload,
+        }
+        wb = sheets_writer.upsert_position(**payload)
+        if wb.get("ok"):
+            n_ok += 1
+        else:
+            n_fail += 1
+        results.append({
+            "symbol":            sym,
+            "name":              name,
+            "pnl_pct":           round(pnl_pct, 2),
+            "short_light":       short_light,
+            "super_short_light": super_light,
+            "chips_light":       chips_light,
+            "company_light":     company_light,
+            "advice":            advice,
+            "written":           bool(wb.get("ok")),
+        })
+    return {"n": len(results), "n_ok": n_ok, "n_fail": n_fail, "items": results}
+
+
+def _organize_v2_watchlist(do_fundamentals: bool, organized_at: str) -> dict:
+    """跑追蹤清單的整理 — 寫回 v2 schema 欄位。"""
+    rows = sheets.load_watchlist()
+    if rows and rows[0].get("_error"):
+        return {"error": rows[0]["_error"]}
+
+    results = []
+    n_ok = n_fail = 0
+    for row in rows:
+        sym = str(row.get("symbol") or row.get("代號") or "").strip()
+        if not sym:
+            continue
+        name = str(row.get("name") or row.get("名稱") or "").strip() or _lookup_stock_name(sym)
+
+        signals = _compute_short_signals(sym)
+        if not signals.get("ok"):
+            n_fail += 1
+            results.append({"symbol": sym, "name": name, "error": signals.get("error")})
+            continue
+
+        short_light = _short_term_light(signals)
+        super_light = _super_short_term_light(signals)
+
+        fund_payload = {}
+        chips_light = "—"
+        company_light = "—"
+        if do_fundamentals:
+            fd = _fetch_fundamentals(sym, name)
+            if fd.get("ok"):
+                chips_light = _chips_light_v2(fd)
+                company_light = _company_light_v2(fd)
+                fund_payload = {
+                    "估值":           fd["estimate"],
+                    "配息":           fd["dividend"],
+                    "營收動能":        fd["revenue"],
+                    "法人籌碼":        fd["institutional"],
+                    "近期新聞重點":    fd["news"],
+                    "籌碼面燈號":      chips_light,
+                    "公司面燈號":      company_light,
+                    "基本面整理時間":   organized_at,
+                }
+
+        advice = _combined_advice(short_light, super_light, chips_light, company_light,
+                                   is_position=False)
+
+        payload = {
+            "symbol": sym,   "代號": sym,
+            "name":   name,  "名稱": name,
+            "現價":            signals["current_price"],
+            "今天表現":         signals["today_desc"],
+            "最近3天":          signals["last3d_desc"],
+            "這週氛圍":         signals["weekly_mood_desc"],
+            "近10天走勢":       signals["ma10_desc"],
+            "量能變化":         signals["volume_desc"],
+            "離20天高低":       signals["range20_desc"],
+            "短線燈號":         short_light,
+            "超短線燈號":       super_light,
+            "技術整理時間":     organized_at,
+            "綜合建議":         advice,
+            **fund_payload,
+        }
+        wb = sheets_writer.upsert_watchlist_item(**payload)
+        if wb.get("ok"):
+            n_ok += 1
+        else:
+            n_fail += 1
+        results.append({
+            "symbol":            sym,
+            "name":              name,
+            "short_light":       short_light,
+            "super_short_light": super_light,
+            "chips_light":       chips_light,
+            "company_light":     company_light,
+            "advice":            advice,
+            "written":           bool(wb.get("ok")),
+        })
+    return {"n": len(results), "n_ok": n_ok, "n_fail": n_fail, "items": results}
+
+
+@tool(
+    "organize_all_technical",
+    "**「整體技術分析」一鍵工具** — 對「股票部位」+「追蹤清單」每一檔抓 K 線、跑 6 個短線訊號、"
+    "給 2 個技術燈號(短線 5-10 天 + 超短線 2-5 天)、寫綜合建議(技術版),全部寫回 Sheet。"
+    "**使用者說「整體技術分析」「整理技術」「跑技術面」直接呼叫這個**(快,12 檔約 30-60 秒)。"
+    "回覆**只**說「技術面整理好了」+ 簡短列看好/看衰的代號,不要長篇大論,不要 render 完整表格,"
+    "完整資料使用者自己看 Sheet。",
+    {"type": "object", "properties": {}, "required": []},
+)
+async def organize_all_technical(args: dict) -> dict:
+    organized_at = _now_tw_str()
+    fee_rate = float(os.getenv("USER_FEE_RATE", "0.001425"))
+    fee_min  = float(os.getenv("USER_FEE_MIN", "1"))
+    pos = _organize_v2_positions(do_fundamentals=False,
+                                  organized_at=organized_at,
+                                  fee_rate=fee_rate, fee_min=fee_min)
+    wl = _organize_v2_watchlist(do_fundamentals=False, organized_at=organized_at)
+    return _envelope({
+        "ok":           True,
+        "deep":         False,
+        "organized_at": organized_at,
+        "positions":    pos,
+        "watchlist":    wl,
+    })
+
+
+@tool(
+    "organize_all_deep",
+    "**「整體深度分析」一鍵工具** — 技術 + 基本面全套。除了技術面,對每檔還用 web_search 抓估值、"
+    "配息、營收動能、法人籌碼、近期新聞,給 2 個基本面燈號(籌碼面 + 公司面)、寫完整綜合建議。"
+    "**使用者說「整體深度分析」「深度分析」「跑全部」直接呼叫這個**。"
+    "**告訴使用者**這會跑很久(每檔 1-2 分鐘,12 檔可能 15-25 分鐘),建議週末或晚上跑。"
+    "回覆**只**說「深度分析整理好了」+ 簡短列看好/看衰的代號,不要長篇大論。",
+    {"type": "object", "properties": {}, "required": []},
+)
+async def organize_all_deep(args: dict) -> dict:
+    organized_at = _now_tw_str()
+    fee_rate = float(os.getenv("USER_FEE_RATE", "0.001425"))
+    fee_min  = float(os.getenv("USER_FEE_MIN", "1"))
+    pos = _organize_v2_positions(do_fundamentals=True,
+                                  organized_at=organized_at,
+                                  fee_rate=fee_rate, fee_min=fee_min)
+    wl = _organize_v2_watchlist(do_fundamentals=True, organized_at=organized_at)
+    return _envelope({
+        "ok":           True,
+        "deep":         True,
+        "organized_at": organized_at,
+        "positions":    pos,
+        "watchlist":    wl,
+    })
+
+
 @tool(
     "ping_sheets_writer",
     "測試 Apps Script Web App 是否能正常呼叫。回傳 {ok: true, pong: 時間戳} 代表通了。"
@@ -2390,9 +3050,8 @@ ALL_TOOLS = [
     get_realized_pnl,
     record_etf_snapshot,
     get_watchlist,
-    organize_watchlist,
-    organize_positions,
-    organize_all,
+    organize_all_technical,
+    organize_all_deep,
     compute_target_sell_prices,
     ping_sheets_writer,
     get_us_quote,
