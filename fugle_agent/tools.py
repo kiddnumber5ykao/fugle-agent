@@ -1943,8 +1943,11 @@ async def compute_target_sell_prices(args: dict) -> dict:
 # =============================================================================
 
 def _compute_signals(sym: str) -> dict:
-    """對單一代號抓 ~270 個交易日 K 線、跑 RSI/SMA/52w high。
-    回傳 5 個訊號 + 白話訊號摘要。失敗時 ok=False。"""
+    """對單一代號抓 K 線、跑 RSI/SMA/52w high,降級回傳:
+    - 至少 14 根 K 線才能算 RSI(必要,沒有就 ok=False)
+    - 60MA 需要 60 根 → 不夠就回 None,訊號摘要省略中期均線
+    - 52 週高需要最多 252 根 → 不夠就用現有 window 算
+    這樣 Fugle 免費方案(只給 1 個月 ~21 根)也能跑大部分訊號。"""
     try:
         to_dt = datetime.now()
         from_dt = to_dt - timedelta(days=400)  # cal days,留 buffer 給休市
@@ -1952,8 +1955,9 @@ def _compute_signals(sym: str) -> dict:
                                 from_date=from_dt.strftime("%Y-%m-%d"),
                                 to_date=to_dt.strftime("%Y-%m-%d"))
         bars = data.get("data", [])
-        if len(bars) < 60:
-            return {"ok": False, "error": f"K 線只 {len(bars)} 根,不夠算 60MA"}
+        if len(bars) < 14:
+            return {"ok": False, "mode": _client.mode,
+                    "error": f"K 線只 {len(bars)} 根(模式: {_client.mode}),不夠算 RSI"}
         closes = [b["close"] for b in bars]
 
         # 抓即時價:Fugle quote 優先,失敗用最後一根 close
@@ -1969,35 +1973,51 @@ def _compute_signals(sym: str) -> dict:
         except Exception:
             pass
 
+        # RSI(14):必有
         rsi14 = rsi(closes, 14)[-1]
-        ma20 = sma(closes, 20)[-1]
-        ma60 = sma(closes, 60)[-1]
+
+        # 20MA:14 ~ 20 根可用前面所有 close 平均當近似;>= 20 根用標準 20MA
+        if len(closes) >= 20:
+            ma20 = sma(closes, 20)[-1]
+        else:
+            ma20 = sum(closes) / len(closes)
         dist_20ma_pct = (current / ma20 - 1) * 100 if ma20 else 0
-        dist_60ma_pct = (current / ma60 - 1) * 100 if ma60 else 0
+
+        # 60MA:沒 60 根就回 None,訊號摘要省略中期均線
+        ma60 = sma(closes, 60)[-1] if len(closes) >= 60 else None
+        dist_60ma_pct = (current / ma60 - 1) * 100 if ma60 else None
+
+        # 近 5 日漲跌
         change_5d_pct = (current / closes[-6] - 1) * 100 if len(closes) >= 6 else 0
-        window = closes[-252:] if len(closes) >= 252 else closes   # 52 週 ≈ 252 個交易日
+
+        # 52 週高:不夠 252 根就用現有最高(會標註在訊號摘要)
+        window = closes[-252:] if len(closes) >= 252 else closes
+        high_window_label = "一年" if len(closes) >= 252 else f"近 {len(closes)} 日"
         high_52w = max(window)
         dist_52w_high_pct = (current / high_52w - 1) * 100 if high_52w else 0
 
         return {
-            "ok": True,
+            "ok":                True,
+            "mode":              _client.mode,
+            "n_bars":            len(bars),
             "current_price":     round(current, 2),
             "rsi14":             round(rsi14, 1),
             "dist_20ma_pct":     round(dist_20ma_pct, 2),
-            "dist_60ma_pct":     round(dist_60ma_pct, 2),
+            "dist_60ma_pct":     round(dist_60ma_pct, 2) if dist_60ma_pct is not None else None,
             "change_5d_pct":     round(change_5d_pct, 2),
             "dist_52w_high_pct": round(dist_52w_high_pct, 2),
             "summary":           _signal_summary_zh(rsi14, dist_20ma_pct, dist_60ma_pct,
-                                                     change_5d_pct, dist_52w_high_pct),
+                                                     change_5d_pct, dist_52w_high_pct,
+                                                     high_window_label),
         }
     except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "mode": _client.mode, "error": f"{type(e).__name__}: {e}"}
 
 
-def _signal_summary_zh(rsi14, dist_20ma, dist_60ma, change_5d, dist_52w_high) -> str:
-    """把 5 個訊號翻譯成白話一句話(不出現專有名詞,給使用者直接看)。"""
+def _signal_summary_zh(rsi14, dist_20ma, dist_60ma, change_5d, dist_52w_high,
+                        high_window_label="一年") -> str:
+    """把訊號翻譯成白話。dist_60ma 可以是 None(資料不足時)。"""
     parts = []
-    # RSI → 「大家在買還是在賣」
     if rsi14 >= 70:
         parts.append("大家在搶買、可能過熱")
     elif rsi14 >= 55:
@@ -2009,7 +2029,6 @@ def _signal_summary_zh(rsi14, dist_20ma, dist_60ma, change_5d, dist_52w_high) ->
     else:
         parts.append("大家都在賣、可能殺過頭")
 
-    # 短期均線位置
     if dist_20ma < -3:
         parts.append("短期跌深")
     elif dist_20ma < 0:
@@ -2019,13 +2038,12 @@ def _signal_summary_zh(rsi14, dist_20ma, dist_60ma, change_5d, dist_52w_high) ->
     else:
         parts.append("短期漲很多")
 
-    # 中期均線(只在轉弱時才提)
-    if dist_60ma < -5:
-        parts.append("中期趨勢已壞")
-    elif dist_60ma < 0:
-        parts.append("中期略弱")
+    if dist_60ma is not None:
+        if dist_60ma < -5:
+            parts.append("中期趨勢已壞")
+        elif dist_60ma < 0:
+            parts.append("中期略弱")
 
-    # 近 5 日漲跌
     if change_5d <= -5:
         parts.append(f"這週跌很慘({change_5d:.1f}%)")
     elif change_5d <= -2:
@@ -2037,15 +2055,14 @@ def _signal_summary_zh(rsi14, dist_20ma, dist_60ma, change_5d, dist_52w_high) ->
     else:
         parts.append("最近價格沒什麼動")
 
-    # 距 52 週高
     if dist_52w_high >= -3:
-        parts.append("貼近一年新高")
+        parts.append(f"貼近{high_window_label}新高")
     elif dist_52w_high >= -10:
-        parts.append(f"離一年高點 {-dist_52w_high:.0f}%")
+        parts.append(f"離{high_window_label}高點 {-dist_52w_high:.0f}%")
     elif dist_52w_high >= -25:
-        parts.append(f"離一年高點滿遠({-dist_52w_high:.0f}%)")
+        parts.append(f"離{high_window_label}高點滿遠({-dist_52w_high:.0f}%)")
     else:
-        parts.append(f"從高點摔很慘(−{-dist_52w_high:.0f}%)")
+        parts.append(f"從{high_window_label}高點摔很慘(−{-dist_52w_high:.0f}%)")
 
     return "、".join(parts)
 
@@ -2094,7 +2111,7 @@ def _position_verdict(signals: dict, pnl_pct: float) -> str:
         return "❌ 考慮停損"
     if pnl_pct <= -5 and rsi_ <= 35:
         return "🟢 可加碼"
-    if rsi_ >= 70 or dist_60ma < -5:
+    if rsi_ >= 70 or (dist_60ma is not None and dist_60ma < -5):
         return "⚠️ 警戒"
     return "🔵 續抱"
 
