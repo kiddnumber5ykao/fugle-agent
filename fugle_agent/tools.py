@@ -2116,6 +2116,13 @@ def _position_verdict(signals: dict, pnl_pct: float) -> str:
     return "🔵 續抱"
 
 
+def _fmt_pct(v) -> str:
+    """格式化百分比，None 顯示為「—」(資料不足時用)。"""
+    if v is None:
+        return "—"
+    return f"{v:+.2f}%"
+
+
 def _organize_watchlist_inner() -> dict:
     """跑追蹤清單整理,回傳 dict(不包 _envelope)。"""
     rows = sheets.load_watchlist()
@@ -2144,10 +2151,10 @@ def _organize_watchlist_inner() -> dict:
             "name":       name,                  "名稱":       name,
             "現價":        signals["current_price"],
             "RSI(14)":    signals["rsi14"],
-            "距20MA":      f"{signals['dist_20ma_pct']:+.2f}%",
-            "距60MA":      f"{signals['dist_60ma_pct']:+.2f}%",
-            "近5日漲跌":   f"{signals['change_5d_pct']:+.2f}%",
-            "距52週高":    f"{signals['dist_52w_high_pct']:+.2f}%",
+            "距20MA":      _fmt_pct(signals["dist_20ma_pct"]),
+            "距60MA":      _fmt_pct(signals["dist_60ma_pct"]),
+            "近5日漲跌":   _fmt_pct(signals["change_5d_pct"]),
+            "距52週高":    _fmt_pct(signals["dist_52w_high_pct"]),
             "訊號摘要":    signals["summary"],
             "AI 建議":    verdict,
             "上次整理":    organized_at,
@@ -2226,10 +2233,10 @@ def _organize_positions_inner(fee_rate: float, fee_min: float) -> dict:
             "損益":        round(pnl, 2),
             "損益%":       round(pnl_pct, 2),
             "RSI(14)":    signals["rsi14"],
-            "距20MA":      f"{signals['dist_20ma_pct']:+.2f}%",
-            "距60MA":      f"{signals['dist_60ma_pct']:+.2f}%",
-            "近5日漲跌":   f"{signals['change_5d_pct']:+.2f}%",
-            "距52週高":    f"{signals['dist_52w_high_pct']:+.2f}%",
+            "距20MA":      _fmt_pct(signals["dist_20ma_pct"]),
+            "距60MA":      _fmt_pct(signals["dist_60ma_pct"]),
+            "近5日漲跌":   _fmt_pct(signals["change_5d_pct"]),
+            "距52週高":    _fmt_pct(signals["dist_52w_high_pct"]),
             "訊號摘要":    signals["summary"],
             "AI 建議":    verdict,
             "上次整理":    organized_at,
