@@ -116,20 +116,45 @@ def _envelope(data: Any) -> dict:
 
 # ---------- 名字自動帶入 helpers(使用者只填代號時兜底) ----------
 
+_NAME_CACHE: dict[str, str] = {}  # 同 session 同個 symbol 只查一次
+
+
 def _lookup_stock_name(symbol: str) -> str:
-    """從內建熱門表 + Fugle tickers 查股票名稱,零外部呼叫的快查。"""
+    """查股票名稱,三層 fallback:內建熱門表 → Fugle tickers → Fugle quote。
+    免費方案的 Fugle 雖然 tickers 拿不到,但 quote 一定會帶名字。"""
     if not symbol:
         return ""
+    if symbol in _NAME_CACHE:
+        return _NAME_CACHE[symbol]
+
+    # 1) 內建熱門表 + Fugle tickers(symbol_lookup.search)
+    name = ""
     try:
         hits = symbol_lookup.search(symbol, fugle_client=_client, limit=5)
+        for h in hits:
+            if str(h.get("symbol")) == str(symbol):
+                name = h.get("name") or ""
+                break
+        if not name and hits:
+            name = hits[0].get("name", "")
     except Exception:
-        return ""
-    # 精準符合代號優先
-    for h in hits:
-        if str(h.get("symbol")) == str(symbol):
-            return h.get("name") or ""
-    # 沒精準就拿第一筆當兜底(極少觸發,因為代號是 unique key)
-    return hits[0].get("name", "") if hits else ""
+        pass
+
+    # 2) Fugle quote 通常會帶 name 欄位 — 這個免費方案也能用
+    if not name:
+        try:
+            q = _client.quote(symbol)
+            if isinstance(q, dict):
+                for key in ("name", "nameZhTw", "Name", "shortName"):
+                    v = q.get(key)
+                    if v:
+                        name = str(v).strip()
+                        break
+        except Exception:
+            pass
+
+    _NAME_CACHE[symbol] = name
+    return name
 
 
 _FUND_NAME_CACHE: dict[str, str] = {}
