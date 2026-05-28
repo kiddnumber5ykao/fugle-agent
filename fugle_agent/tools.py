@@ -3017,9 +3017,27 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
         if update_technical:
             signals = signals_cache.get(sym) or _compute_short_signals(sym)
             if not signals.get("ok"):
+                # 寫失敗標記到 Sheet — 不要靜默跳過,讓使用者看到哪一檔卡哪
+                err_short = str(signals.get("error", "未知錯誤"))[:200]
+                print(f"⚠️ 技術分析失敗 sym={sym}: {err_short}", flush=True)
+                fail_payload = {
+                    "symbol": sym, "代號": sym,
+                    "name":   name, "名稱": name,
+                    "今天表現":     f"❌ Fugle 抓 K 線失敗:{err_short}",
+                    "最近3天":      "—",
+                    "這週氛圍":     "—",
+                    "近10天走勢":   "—",
+                    "量能變化":     "—",
+                    "離20天高低":   "—",
+                    "短線燈號":     "—",
+                    "超短線燈號":   "—",
+                    "技術整理時間": f"{organized_at} (失敗)",
+                }
+                wb = sheets_writer.upsert_position(**fail_payload)
                 n_fail += 1
                 results.append({"symbol": sym, "name": name,
-                                 "error": signals.get("error")})
+                                 "error": signals.get("error"),
+                                 "written": bool(wb.get("ok"))})
                 continue
             price = signals["current_price"]
             is_etf = sym.startswith("00") and len(sym) >= 4
@@ -3151,9 +3169,26 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
         if update_technical:
             signals = signals_cache.get(sym) or _compute_short_signals(sym)
             if not signals.get("ok"):
+                err_short = str(signals.get("error", "未知錯誤"))[:200]
+                print(f"⚠️ 技術分析失敗 sym={sym}: {err_short}", flush=True)
+                fail_payload = {
+                    "symbol": sym, "代號": sym,
+                    "name":   name, "名稱": name,
+                    "今天表現":     f"❌ Fugle 抓 K 線失敗:{err_short}",
+                    "最近3天":      "—",
+                    "這週氛圍":     "—",
+                    "近10天走勢":   "—",
+                    "量能變化":     "—",
+                    "離20天高低":   "—",
+                    "短線燈號":     "—",
+                    "超短線燈號":   "—",
+                    "技術整理時間": f"{organized_at} (失敗)",
+                }
+                wb = sheets_writer.upsert_watchlist_item(**fail_payload)
                 n_fail += 1
                 results.append({"symbol": sym, "name": name,
-                                 "error": signals.get("error")})
+                                 "error": signals.get("error"),
+                                 "written": bool(wb.get("ok"))})
                 continue
             short_light = _short_term_light(signals)
             super_light = _super_short_term_light(signals)
