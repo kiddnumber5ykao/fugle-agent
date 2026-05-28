@@ -115,11 +115,13 @@ def delete_watchlist_item(symbol: str) -> dict:
     return _post("delete_watchlist_item", {"symbol": symbol})
 
 
-def manual_sync() -> dict:
+def manual_sync(timeout: int = 90) -> dict:
     """觸發 Apps Script 跑一次完整同步:
     重建股票部位 + 寫 realized_pnl 到股票交易 + 同步「實際損益」分頁 + 寫目標賣價公式。
-    Python 端寫完任何交易應該呼叫這個確保所有衍生 tab 都到位。"""
-    return _post("manual_sync", {})
+    Python 端寫完任何交易應該呼叫這個確保所有衍生 tab 都到位。
+
+    這個動作牽涉好幾個 tab 寫入 + 公式重算,12+ 部位通常 30-60 秒,給 90 秒 buffer。"""
+    return _post("manual_sync", {}, timeout=timeout)
 
 
 # ---- 對話歷史持久化 ----
