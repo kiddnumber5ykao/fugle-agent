@@ -2663,7 +2663,9 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
         return {"ok": False, "error": "anthropic SDK 未安裝"}
 
     client = Anthropic()
-    model = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+    # 用 `or default` 而不是 getenv default,這樣空字串也會 fallback
+    # (GitHub Actions 沒設 secret 時會把 env var 注成 "")
+    model = (os.getenv("ANTHROPIC_MODEL") or "").strip() or "claude-haiku-4-5-20251001"
 
     prompt = (
         f"請用 web_search 工具查詢台股 {sym} {name}(如果代號未知名稱就忽略名稱),"
