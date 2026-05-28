@@ -69,7 +69,7 @@ st.set_page_config(
     page_title="加油好嗎",
     page_icon=_icon_path,
     layout="centered",
-    initial_sidebar_state="auto",
+    initial_sidebar_state="collapsed",   # 預設收起 sidebar(使用者要展開可手動)
 )
 
 
@@ -215,30 +215,14 @@ if "history" not in st.session_state:
 
 
 # ---------------------------------------------------------------------------
-# Sidebar — settings + examples
+# Sidebar(收起預設) — 保留清除對話按鈕,使用者要時可展開
 # ---------------------------------------------------------------------------
 with st.sidebar:
-    st.header("⚙️ 設定")
     if SETTINGS.mock:
-        st.info(
-            "🎭 **Mock 模式** — 資料是 SHA1 種子產生的假數據,僅供示範。"
-            "想接真實資料,在 Streamlit secrets 加上 `FUGLE_MARKETDATA_API_KEY` 後重新部署。"
-        )
+        st.info("🎭 Mock 模式")
     else:
-        st.success("📡 **Live 模式** — Fugle 真實資料")
-
-    # --- 對話控制 ---
-    n_msgs = len(st.session_state.get("history", []))
-    st.caption(f"📜 對話訊息數:**{n_msgs}** 則")
-    if n_msgs >= 20:
-        st.warning("對話有點長,舊訊息會自動被丟掉以省 token 額度。")
-
-    if st.button(
-        "🗑️ 清除對話",
-        use_container_width=True,
-        help="清掉 session + 跨裝置持久化的對話歷史(Google Sheet 上)。"
-             "USER_CONTEXT、API key、Sheet 上其他資料都保留。",
-    ):
+        st.success("📡 Live 模式")
+    if st.button("🗑️ 清除對話", use_container_width=True):
         st.session_state.display = []
         st.session_state.history = []
         try:
@@ -247,25 +231,48 @@ with st.sidebar:
         except Exception:
             pass
         st.rerun()
+    st.caption("⚠️ 僅供示範,不構成投資建議")
 
-    st.divider()
-    st.caption("💡 範例問題(點一下直接問):")
-    examples = [
-        "今天 2330 報價如何?",
-        "拉 0050 過去 90 天 K 線,算 20/60 SMA,現在是黃金交叉還死亡交叉?",
-        "跑 2330 從 2025-01-01 到今天的 20/60 SMA 交叉回測,跟買進持有比較",
-        "比較 2330 跟 2454 過去 60 天的 RSI 14,哪個比較弱?",
-        "今天漲幅前 3 大的股票",
-    ]
-    for ex in examples:
-        if st.button(ex, key=f"ex_{hash(ex) & 0xFFFF}", use_container_width=True):
-            st.session_state._pending = ex
-            st.rerun()
 
-    st.divider()
-    st.caption(
-        "⚠️ 本工具僅供研究示範,**不構成投資建議**;策略回測過去績效不代表未來。"
-    )
+# ---------------------------------------------------------------------------
+# 頂端狀態列 — 顯示「深度分析完成時間」(從 Sheet 抓最新值)
+# ---------------------------------------------------------------------------
+def _latest_deep_analysis_time() -> str | None:
+    """從股票部位 / 追蹤清單抓最新的「基本面整理時間」。"""
+    try:
+        from fugle_agent import sheets as _sheets
+        latest = None
+        for p in (_sheets.load_positions() or []):
+            t = str(p.get("基本面整理時間") or p.get("基本面整理时间") or "").strip()
+            if t and (latest is None or t > latest):
+                latest = t
+        for w in (_sheets.load_watchlist() or []):
+            t = str(w.get("基本面整理時間") or "").strip()
+            if t and (latest is None or t > latest):
+                latest = t
+        return latest
+    except Exception:
+        return None
+
+
+_deep_time = _latest_deep_analysis_time()
+_status_col, _btn1_col, _btn2_col = st.columns([2, 1, 1])
+with _status_col:
+    if _deep_time:
+        st.caption(f"📊 深度分析完成:**{_deep_time}**")
+    else:
+        st.caption("📊 深度分析:**還沒跑過**")
+with _btn1_col:
+    if st.button("📈 整體技術分析", use_container_width=True,
+                  help="抓 K 線、跑 6 個短線訊號、寫回 Sheet。約 10-15 秒。"):
+        st.session_state._pending = "整體技術分析"
+        st.rerun()
+with _btn2_col:
+    if st.button("💡 此刻要做什麼", use_container_width=True,
+                  help="不重算,只讀 Sheet 上的燈號告訴你該動哪些。"):
+        st.session_state._pending = "此刻要做什麼"
+        st.rerun()
+st.divider()
 
 
 # ---------------------------------------------------------------------------
