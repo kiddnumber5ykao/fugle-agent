@@ -2944,17 +2944,52 @@ def _combined_advice(short_light: str, super_short_light: str,
     return matrix.get((tech_key, fund_key), "🟡 訊號不明、再等等")
 
 
-def _organize_v2_positions(do_fundamentals: bool, organized_at: str,
-                            fee_rate: float, fee_min: float,
+def _build_existing_lights_map(source: str) -> dict[str, dict]:
+    """從 Sheet 讀現有的 4 個燈號 — 用於「只跑一邊時讓綜合建議仍能算對」。
+    source = 'positions' 或 'watchlist'。"""
+    try:
+        if source == "positions":
+            tab = os.getenv(sheets.POSITIONS_TAB_ENV, sheets.DEFAULT_POSITIONS_TAB)
+            rows = sheets.fetch_tab(tab)
+        else:
+            rows = sheets.load_watchlist()
+    except Exception:
+        return {}
+    out: dict[str, dict] = {}
+    for r in rows or []:
+        if not r or r.get("_error"):
+            continue
+        sym = str(r.get("代號") or r.get("symbol") or "").replace("'", "").strip()
+        if not sym:
+            continue
+        out[sym] = {
+            "short":       str(r.get("短線燈號") or ""),
+            "super_short": str(r.get("超短線燈號") or ""),
+            "chips":       str(r.get("籌碼面燈號") or ""),
+            "company":     str(r.get("公司面燈號") or ""),
+        }
+    return out
+
+
+def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
+                            organized_at: str, fee_rate: float, fee_min: float,
                             signals_cache: dict[str, dict] | None = None) -> dict:
-    """跑股票部位的整理 — 寫回 v2 schema 欄位。
-    可選 signals_cache:外部已經並行算好的 {sym: signals},直接用。"""
+    """跑股票部位的整理 — 技術跟基本面**分開更新**。
+    - update_technical=True:寫 現價/市值/損益/6 個技術描述/2 個技術燈號/技術整理時間
+    - update_fundamentals=True:寫 5 個基本面描述/2 個基本面燈號/基本面整理時間
+    - 綜合建議**永遠更新**(用本次新算 + 另一邊從 Sheet 讀的舊燈號)
+    """
     positions = sheets.load_positions()
     if positions and positions[0].get("_error"):
         return {"error": positions[0]["_error"]}
 
-    # 若沒提供外部 cache,自己並行抓所有要算的 sym
-    if signals_cache is None:
+    # 只跑一邊時,需要從 Sheet 讀另一邊的舊燈號才能算「綜合建議」
+    existing_lights = (_build_existing_lights_map("positions")
+                       if not (update_technical and update_fundamentals)
+                       else {})
+
+    # 若要更新技術且沒提供 cache,自己並行抓
+    if update_technical and signals_cache is None:
         syms_to_compute = [
             str(p.get("symbol", "")).strip()
             for p in positions
@@ -2963,6 +2998,8 @@ def _organize_v2_positions(do_fundamentals: bool, organized_at: str,
             and float(p.get("total_cost") or 0) > 0
         ]
         signals_cache = _prefetch_signals_parallel(syms_to_compute)
+    elif signals_cache is None:
+        signals_cache = {}
 
     results = []
     n_ok = n_fail = 0
@@ -2973,30 +3010,52 @@ def _organize_v2_positions(do_fundamentals: bool, organized_at: str,
         name = str(p.get("name") or "").strip() or _lookup_stock_name(sym)
         if shares <= 0 or total_cost <= 0:
             continue
+        prev = existing_lights.get(sym, {})
 
-        signals = signals_cache.get(sym) or _compute_short_signals(sym)
-        if not signals.get("ok"):
-            n_fail += 1
-            results.append({"symbol": sym, "name": name, "error": signals.get("error")})
-            continue
+        # === 技術部分:更新 or 從 Sheet 讀舊燈號 ===
+        tech_payload: dict = {}
+        if update_technical:
+            signals = signals_cache.get(sym) or _compute_short_signals(sym)
+            if not signals.get("ok"):
+                n_fail += 1
+                results.append({"symbol": sym, "name": name,
+                                 "error": signals.get("error")})
+                continue
+            price = signals["current_price"]
+            is_etf = sym.startswith("00") and len(sym) >= 4
+            tax_rate = 0.001 if is_etf else 0.003
+            gross = price * shares
+            fee = max(fee_min, gross * fee_rate)
+            tax = gross * tax_rate
+            net = gross - fee - tax
+            pnl = net - total_cost
+            pnl_pct = (pnl / total_cost * 100) if total_cost else 0
+            short_light = _short_term_light(signals)
+            super_light = _super_short_term_light(signals)
+            tech_payload = {
+                "現價":         round(price, 2),
+                "市值":         round(gross, 2),
+                "損益":         round(pnl, 2),
+                "損益%":        round(pnl_pct, 2),
+                "今天表現":     signals["today_desc"],
+                "最近3天":      signals["last3d_desc"],
+                "這週氛圍":     signals["weekly_mood_desc"],
+                "近10天走勢":   signals["ma10_desc"],
+                "量能變化":     signals["volume_desc"],
+                "離20天高低":   signals["range20_desc"],
+                "短線燈號":     short_light,
+                "超短線燈號":   super_light,
+                "技術整理時間": organized_at,
+            }
+        else:
+            # 不重算 → 從 Sheet 讀現有燈號
+            short_light = prev.get("short", "")
+            super_light = prev.get("super_short", "")
+            pnl_pct = 0  # not used when only updating fundamentals
 
-        price = signals["current_price"]
-        is_etf = sym.startswith("00") and len(sym) >= 4
-        tax_rate = 0.001 if is_etf else 0.003
-        gross = price * shares
-        fee = max(fee_min, gross * fee_rate)
-        tax = gross * tax_rate
-        net = gross - fee - tax
-        pnl = net - total_cost
-        pnl_pct = (pnl / total_cost * 100) if total_cost else 0
-
-        short_light = _short_term_light(signals)
-        super_light = _super_short_term_light(signals)
-
-        fund_payload = {}
-        chips_light = "—"
-        company_light = "—"
-        if do_fundamentals:
+        # === 基本面部分:更新 or 從 Sheet 讀舊燈號 ===
+        fund_payload: dict = {}
+        if update_fundamentals:
             fd = _fetch_fundamentals(sym, name)
             if fd.get("ok"):
                 chips_light = _chips_light_v2(fd)
@@ -3012,8 +3071,9 @@ def _organize_v2_positions(do_fundamentals: bool, organized_at: str,
                     "基本面整理時間":   organized_at,
                 }
             else:
-                # 失敗也寫時間戳 + 錯誤訊息,讓使用者知道有試過、看得到原因
                 err_short = str(fd.get("error", "未知錯誤"))[:300]
+                chips_light = "—"
+                company_light = "—"
                 fund_payload = {
                     "估值":           f"❌ API 失敗:{err_short}",
                     "配息":           "—",
@@ -3024,28 +3084,18 @@ def _organize_v2_positions(do_fundamentals: bool, organized_at: str,
                     "公司面燈號":      "—",
                     "基本面整理時間":   f"{organized_at} (失敗)",
                 }
+        else:
+            chips_light = prev.get("chips", "")
+            company_light = prev.get("company", "")
 
         advice = _combined_advice(short_light, super_light, chips_light, company_light,
                                    is_position=True)
-
         payload = {
-            "symbol": sym,    "代號": sym,
-            "name":   name,   "名稱": name,
-            "現價":            round(price, 2),
-            "市值":            round(gross, 2),
-            "損益":            round(pnl, 2),
-            "損益%":           round(pnl_pct, 2),
-            "今天表現":         signals["today_desc"],
-            "最近3天":          signals["last3d_desc"],
-            "這週氛圍":         signals["weekly_mood_desc"],
-            "近10天走勢":       signals["ma10_desc"],
-            "量能變化":         signals["volume_desc"],
-            "離20天高低":       signals["range20_desc"],
-            "短線燈號":         short_light,
-            "超短線燈號":       super_light,
-            "技術整理時間":     organized_at,
-            "綜合建議":         advice,
+            "symbol": sym, "代號": sym,
+            "name":   name, "名稱": name,
+            **tech_payload,
             **fund_payload,
+            "綜合建議": advice,
         }
         wb = sheets_writer.upsert_position(**payload)
         if wb.get("ok"):
@@ -3055,7 +3105,6 @@ def _organize_v2_positions(do_fundamentals: bool, organized_at: str,
         results.append({
             "symbol":            sym,
             "name":              name,
-            "pnl_pct":           round(pnl_pct, 2),
             "short_light":       short_light,
             "super_short_light": super_light,
             "chips_light":       chips_light,
@@ -3066,22 +3115,27 @@ def _organize_v2_positions(do_fundamentals: bool, organized_at: str,
     return {"n": len(results), "n_ok": n_ok, "n_fail": n_fail, "items": results}
 
 
-def _organize_v2_watchlist(do_fundamentals: bool, organized_at: str,
+def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
+                            organized_at: str,
                             signals_cache: dict[str, dict] | None = None) -> dict:
-    """跑追蹤清單的整理 — 寫回 v2 schema 欄位。
-    可選 signals_cache:外部已經並行算好的 {sym: signals}。"""
+    """跑追蹤清單的整理 — 技術跟基本面**分開更新**(對應 _organize_v2_positions)。"""
     rows = sheets.load_watchlist()
     if rows and rows[0].get("_error"):
         return {"error": rows[0]["_error"]}
 
-    # 若沒提供外部 cache,自己並行抓
-    if signals_cache is None:
+    existing_lights = (_build_existing_lights_map("watchlist")
+                       if not (update_technical and update_fundamentals)
+                       else {})
+
+    if update_technical and signals_cache is None:
         syms = [
             str(r.get("symbol") or r.get("代號") or "").strip()
             for r in rows
             if str(r.get("symbol") or r.get("代號") or "").strip()
         ]
         signals_cache = _prefetch_signals_parallel(syms)
+    elif signals_cache is None:
+        signals_cache = {}
 
     results = []
     n_ok = n_fail = 0
@@ -3090,20 +3144,38 @@ def _organize_v2_watchlist(do_fundamentals: bool, organized_at: str,
         if not sym:
             continue
         name = str(row.get("name") or row.get("名稱") or "").strip() or _lookup_stock_name(sym)
+        prev = existing_lights.get(sym, {})
 
-        signals = signals_cache.get(sym) or _compute_short_signals(sym)
-        if not signals.get("ok"):
-            n_fail += 1
-            results.append({"symbol": sym, "name": name, "error": signals.get("error")})
-            continue
+        # === 技術部分 ===
+        tech_payload: dict = {}
+        if update_technical:
+            signals = signals_cache.get(sym) or _compute_short_signals(sym)
+            if not signals.get("ok"):
+                n_fail += 1
+                results.append({"symbol": sym, "name": name,
+                                 "error": signals.get("error")})
+                continue
+            short_light = _short_term_light(signals)
+            super_light = _super_short_term_light(signals)
+            tech_payload = {
+                "現價":         signals["current_price"],
+                "今天表現":     signals["today_desc"],
+                "最近3天":      signals["last3d_desc"],
+                "這週氛圍":     signals["weekly_mood_desc"],
+                "近10天走勢":   signals["ma10_desc"],
+                "量能變化":     signals["volume_desc"],
+                "離20天高低":   signals["range20_desc"],
+                "短線燈號":     short_light,
+                "超短線燈號":   super_light,
+                "技術整理時間": organized_at,
+            }
+        else:
+            short_light = prev.get("short", "")
+            super_light = prev.get("super_short", "")
 
-        short_light = _short_term_light(signals)
-        super_light = _super_short_term_light(signals)
-
-        fund_payload = {}
-        chips_light = "—"
-        company_light = "—"
-        if do_fundamentals:
+        # === 基本面部分 ===
+        fund_payload: dict = {}
+        if update_fundamentals:
             fd = _fetch_fundamentals(sym, name)
             if fd.get("ok"):
                 chips_light = _chips_light_v2(fd)
@@ -3120,6 +3192,8 @@ def _organize_v2_watchlist(do_fundamentals: bool, organized_at: str,
                 }
             else:
                 err_short = str(fd.get("error", "未知錯誤"))[:300]
+                chips_light = "—"
+                company_light = "—"
                 fund_payload = {
                     "估值":           f"❌ API 失敗:{err_short}",
                     "配息":           "—",
@@ -3130,25 +3204,18 @@ def _organize_v2_watchlist(do_fundamentals: bool, organized_at: str,
                     "公司面燈號":      "—",
                     "基本面整理時間":   f"{organized_at} (失敗)",
                 }
+        else:
+            chips_light = prev.get("chips", "")
+            company_light = prev.get("company", "")
 
         advice = _combined_advice(short_light, super_light, chips_light, company_light,
                                    is_position=False)
-
         payload = {
-            "symbol": sym,   "代號": sym,
-            "name":   name,  "名稱": name,
-            "現價":            signals["current_price"],
-            "今天表現":         signals["today_desc"],
-            "最近3天":          signals["last3d_desc"],
-            "這週氛圍":         signals["weekly_mood_desc"],
-            "近10天走勢":       signals["ma10_desc"],
-            "量能變化":         signals["volume_desc"],
-            "離20天高低":       signals["range20_desc"],
-            "短線燈號":         short_light,
-            "超短線燈號":       super_light,
-            "技術整理時間":     organized_at,
-            "綜合建議":         advice,
+            "symbol": sym, "代號": sym,
+            "name":   name, "名稱": name,
+            **tech_payload,
             **fund_payload,
+            "綜合建議": advice,
         }
         wb = sheets_writer.upsert_watchlist_item(**payload)
         if wb.get("ok"):
@@ -3198,11 +3265,12 @@ async def organize_all_technical(args: dict) -> dict:
         pass
     signals_cache = _prefetch_signals_parallel(list(all_syms))
 
-    pos = _organize_v2_positions(do_fundamentals=False,
+    pos = _organize_v2_positions(update_technical=True, update_fundamentals=False,
                                   organized_at=organized_at,
                                   fee_rate=fee_rate, fee_min=fee_min,
                                   signals_cache=signals_cache)
-    wl = _organize_v2_watchlist(do_fundamentals=False, organized_at=organized_at,
+    wl = _organize_v2_watchlist(update_technical=True, update_fundamentals=False,
+                                 organized_at=organized_at,
                                  signals_cache=signals_cache)
     return _envelope({
         "ok":           True,
@@ -3250,15 +3318,14 @@ async def organize_all_deep(args: dict) -> dict:
         pass
     _prefetch_fundamentals_parallel(items_to_prefetch)
 
-    # 也並行抓技術訊號(共用 cache)
-    signals_cache = _prefetch_signals_parallel([s for s, _ in items_to_prefetch])
-
-    pos = _organize_v2_positions(do_fundamentals=True,
+    # 深度只跑基本面,**不重算**技術(綜合建議會讀 Sheet 上的舊燈號去算)
+    pos = _organize_v2_positions(update_technical=False, update_fundamentals=True,
                                   organized_at=organized_at,
                                   fee_rate=fee_rate, fee_min=fee_min,
-                                  signals_cache=signals_cache)
-    wl = _organize_v2_watchlist(do_fundamentals=True, organized_at=organized_at,
-                                 signals_cache=signals_cache)
+                                  signals_cache=None)
+    wl = _organize_v2_watchlist(update_technical=False, update_fundamentals=True,
+                                 organized_at=organized_at,
+                                 signals_cache=None)
     return _envelope({
         "ok":              True,
         "deep":            True,
