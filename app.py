@@ -237,31 +237,32 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # 頂端狀態列 — 顯示「深度分析完成時間」(從 Sheet 抓最新值)
 # ---------------------------------------------------------------------------
-def _latest_deep_analysis_time() -> str | None:
-    """從股票部位 / 追蹤清單抓最新的「基本面整理時間」。"""
+def _latest_analysis_times() -> tuple[str | None, str | None]:
+    """從追蹤清單抓最新的「技術整理時間」+「基本面整理時間」(positions 因 normalize
+    會被 strip,所以從追蹤清單原始 row 抓最可靠)。回傳 (tech_time, deep_time)。"""
     try:
         from fugle_agent import sheets as _sheets
-        latest = None
-        for p in (_sheets.load_positions() or []):
-            t = str(p.get("基本面整理時間") or p.get("基本面整理时间") or "").strip()
-            if t and (latest is None or t > latest):
-                latest = t
+        tech_latest = None
+        deep_latest = None
         for w in (_sheets.load_watchlist() or []):
-            t = str(w.get("基本面整理時間") or "").strip()
-            if t and (latest is None or t > latest):
-                latest = t
-        return latest
+            t = str(w.get("技術整理時間") or "").strip()
+            if t and (tech_latest is None or t > tech_latest):
+                tech_latest = t
+            d = str(w.get("基本面整理時間") or "").strip()
+            if d and (deep_latest is None or d > deep_latest):
+                deep_latest = d
+        return tech_latest, deep_latest
     except Exception:
-        return None
+        return None, None
 
 
-_deep_time = _latest_deep_analysis_time()
+_tech_time, _deep_time = _latest_analysis_times()
 _status_col, _btn1_col, _btn2_col = st.columns([2, 1, 1])
 with _status_col:
-    if _deep_time:
-        st.caption(f"📊 深度分析完成:**{_deep_time}**")
-    else:
-        st.caption("📊 深度分析:**還沒跑過**")
+    st.caption(
+        f"📈 **技術**:{_tech_time or '—'}　　"
+        f"💎 **深度**:{_deep_time or '—'}"
+    )
 with _btn1_col:
     if st.button("📈 整體技術分析", use_container_width=True,
                   help="抓 K 線、跑 6 個短線訊號、寫回 Sheet。約 10-15 秒。"):
