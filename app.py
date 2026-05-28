@@ -40,6 +40,9 @@ def _load_secrets_into_env() -> None:
         # 內建工具控制
         "WEB_SEARCH_MAX_USES",
         "MAX_HISTORY_MESSAGES",
+        # GitHub Actions 觸發按鈕用
+        "GITHUB_PAT",
+        "GITHUB_REPO",
     )
     try:
         for k in keys:
@@ -69,7 +72,7 @@ st.set_page_config(
     page_title="加油好嗎",
     page_icon=_icon_path,
     layout="centered",
-    initial_sidebar_state="collapsed",   # 預設收起 sidebar(使用者要展開可手動)
+    initial_sidebar_state="auto",   # sidebar 預設展開,放分析按鈕
 )
 
 
@@ -215,9 +218,101 @@ if "history" not in st.session_state:
 
 
 # ---------------------------------------------------------------------------
-# Sidebar(收起預設) — 保留清除對話按鈕,使用者要時可展開
+# Helper:從追蹤清單抓最新「技術整理時間」+「基本面整理時間」
+# ---------------------------------------------------------------------------
+def _latest_analysis_times() -> tuple[str | None, str | None]:
+    try:
+        from fugle_agent import sheets as _sheets
+        tech_latest = None
+        deep_latest = None
+        for w in (_sheets.load_watchlist() or []):
+            t = str(w.get("技術整理時間") or "").strip()
+            if t and (tech_latest is None or t > tech_latest):
+                tech_latest = t
+            d = str(w.get("基本面整理時間") or "").strip()
+            if d and (deep_latest is None or d > deep_latest):
+                deep_latest = d
+        return tech_latest, deep_latest
+    except Exception:
+        return None, None
+
+
+# ---------------------------------------------------------------------------
+# Helper:透過 GitHub Actions API 觸發背景 workflow
+# ---------------------------------------------------------------------------
+def _trigger_github_workflow(workflow_file: str) -> dict:
+    """POST 到 GitHub Actions workflow_dispatch endpoint,讓 workflow 在 GitHub
+    那邊跑(完全不佔 Streamlit 資源,使用者可以繼續聊天)。
+
+    需要 Streamlit Secrets 設定:
+        GITHUB_PAT — fine-grained PAT,scope 至少要包含 Actions read+write
+        GITHUB_REPO — 例如 "kiddnumber5ykao/fugle-agent"(可選,預設用這個)
+    """
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    pat = (os.environ.get("GITHUB_PAT") or "").strip()
+    repo = (os.environ.get("GITHUB_REPO") or "kiddnumber5ykao/fugle-agent").strip()
+    if not pat:
+        return {"ok": False, "error": "Streamlit Secrets 沒設 GITHUB_PAT — "
+                                       "請到 GitHub 建一個 fine-grained token 加進去"}
+
+    url = (f"https://api.github.com/repos/{repo}/actions/workflows/"
+           f"{workflow_file}/dispatches")
+    req = urllib.request.Request(
+        url,
+        data=_json.dumps({"ref": "main"}).encode("utf-8"),
+        headers={
+            "Accept":               "application/vnd.github+json",
+            "Authorization":        f"Bearer {pat}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type":         "application/json",
+            "User-Agent":           "fugle-agent/0.1",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            # GitHub 回 204 No Content 代表成功觸發
+            return {"ok": resp.status in (200, 204), "status": resp.status}
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="ignore")[:300]
+        except Exception:
+            pass
+        return {"ok": False, "error": f"HTTP {e.code}: {body or e.reason}"}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+# ---------------------------------------------------------------------------
+# Sidebar — 分析按鈕 + 狀態列 + 對話控制
 # ---------------------------------------------------------------------------
 with st.sidebar:
+    st.subheader("🚀 一鍵分析")
+    if st.button("📈 整體技術分析", use_container_width=True,
+                  help="在 GitHub Actions 背景跑(約 1-2 分鐘),你可以繼續聊天。"):
+        res = _trigger_github_workflow("intraday_technical.yml")
+        if res.get("ok"):
+            st.success("✅ 已觸發!1-2 分鐘後 Sheet 會更新。")
+        else:
+            st.error(f"❌ {res.get('error')}")
+
+    if st.button("💎 整體深度分析", use_container_width=True,
+                  help="在 GitHub Actions 背景跑(約 5-10 分鐘),你可以繼續聊天。"):
+        res = _trigger_github_workflow("daily_deep_analysis.yml")
+        if res.get("ok"):
+            st.success("✅ 已觸發!5-10 分鐘後 Sheet 會更新。")
+        else:
+            st.error(f"❌ {res.get('error')}")
+
+    if st.button("🔁 重整時間", use_container_width=True,
+                  help="重新讀 Sheet 上的最新時間戳"):
+        st.rerun()
+
+    st.divider()
     if SETTINGS.mock:
         st.info("🎭 Mock 模式")
     else:
@@ -235,45 +330,25 @@ with st.sidebar:
 
 
 # ---------------------------------------------------------------------------
-# 頂端狀態列 — 顯示「深度分析完成時間」(從 Sheet 抓最新值)
+# 主畫面置中時間戳 — 顯眼放在頂部
 # ---------------------------------------------------------------------------
-def _latest_analysis_times() -> tuple[str | None, str | None]:
-    """從追蹤清單抓最新的「技術整理時間」+「基本面整理時間」(positions 因 normalize
-    會被 strip,所以從追蹤清單原始 row 抓最可靠)。回傳 (tech_time, deep_time)。"""
-    try:
-        from fugle_agent import sheets as _sheets
-        tech_latest = None
-        deep_latest = None
-        for w in (_sheets.load_watchlist() or []):
-            t = str(w.get("技術整理時間") or "").strip()
-            if t and (tech_latest is None or t > tech_latest):
-                tech_latest = t
-            d = str(w.get("基本面整理時間") or "").strip()
-            if d and (deep_latest is None or d > deep_latest):
-                deep_latest = d
-        return tech_latest, deep_latest
-    except Exception:
-        return None, None
-
-
 _tech_time, _deep_time = _latest_analysis_times()
-_status_col, _btn1_col, _btn2_col = st.columns([2, 1, 1])
-with _status_col:
-    st.caption(
-        f"📈 **技術**:{_tech_time or '—'}　　"
-        f"💎 **深度**:{_deep_time or '—'}"
-    )
-with _btn1_col:
-    if st.button("📈 整體技術分析", use_container_width=True,
-                  help="抓 K 線、跑 6 個短線訊號、寫回 Sheet。約 10-15 秒。"):
-        st.session_state._pending = "整體技術分析"
-        st.rerun()
-with _btn2_col:
-    if st.button("💡 此刻要做什麼", use_container_width=True,
-                  help="不重算,只讀 Sheet 上的燈號告訴你該動哪些。"):
-        st.session_state._pending = "此刻要做什麼"
-        st.rerun()
-st.divider()
+st.markdown(
+    f"""
+    <div style="text-align:center; padding: 12px 0 8px 0;
+                border-bottom: 1px solid rgba(127,127,127,0.2);
+                margin-bottom: 12px;">
+        <div style="font-size: 0.85em; color: rgba(127,127,127,0.9);">
+            上次更新
+        </div>
+        <div style="font-size: 1.0em; line-height: 1.6;">
+            📈 <b>技術分析</b>:{_tech_time or '尚未跑過'}<br>
+            💎 <b>深度分析</b>:{_deep_time or '尚未跑過'}
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # ---------------------------------------------------------------------------
