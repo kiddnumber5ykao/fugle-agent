@@ -309,23 +309,73 @@ with st.sidebar:
             st.error(f"❌ {res.get('error')}")
 
     if st.button("📋 重算部位+損益", use_container_width=True,
-                  help="剛在股票交易加/改/刪交易後按這個 — 直接打 Apps Script 重算"
-                       "股票部位、實際損益、5/10/15/20% 目標賣價公式,5-10 秒。"):
-        with st.spinner("⏳ 正在計算中…(重算股票部位、實際損益、目標賣價公式)"):
+                  help="剛在股票交易加/改/刪交易後按這個 — 重算股票部位、實際損益、"
+                       "5/10/15/20% 目標賣價公式,並自動補空白的股票名稱。30-60 秒。"):
+        from fugle_agent import sheets_writer as _sw
+        from fugle_agent import sheets as _sh
+        # Step 1: 跑 Apps Script 同步
+        sync_res = {"ok": False}
+        with st.spinner("⏳ 步驟 1/2:重算部位、損益、目標賣價公式…"):
             try:
-                from fugle_agent import sheets_writer as _sw
-                res = _sw.manual_sync()
+                sync_res = _sw.manual_sync()
             except Exception as e:
-                res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
-        if res.get("ok"):
+                sync_res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        if not sync_res.get("ok"):
+            st.error(f"❌ Step 1 失敗:{sync_res.get('error')}")
+        else:
+            # Step 2: 補空白名稱(同時補股票部位 + 股票交易)
+            n_filled_pos = 0
+            n_filled_trades = 0
+            with st.spinner("⏳ 步驟 2/2:補上空白的股票名稱…"):
+                try:
+                    from fugle_agent.tools import _lookup_stock_name
+                    # 2a) 股票部位的空白名稱
+                    name_cache: dict[str, str] = {}
+                    for p in (_sh.load_positions() or []):
+                        if p.get("_error"):
+                            continue
+                        sym = str(p.get("symbol") or "").strip()
+                        cur_name = str(p.get("name") or "").strip()
+                        if sym and not cur_name:
+                            new_name = name_cache.get(sym) or _lookup_stock_name(sym)
+                            if new_name:
+                                name_cache[sym] = new_name
+                                wb = _sw.upsert_position(
+                                    symbol=sym, 代號=sym,
+                                    name=new_name, 名稱=new_name)
+                                if wb.get("ok"):
+                                    n_filled_pos += 1
+                    # 2b) 股票交易裡空白的名稱(暴力做法:重發 add_trade 沒辦法,
+                    # 改用 Apps Script 一個新動作會更乾淨。目前先只補部位 + 追蹤清單。)
+                    for w in (_sh.load_watchlist() or []):
+                        if w.get("_error"):
+                            continue
+                        sym = str(w.get("symbol") or w.get("代號") or "").strip()
+                        cur_name = str(w.get("name") or w.get("名稱") or "").strip()
+                        if sym and not cur_name:
+                            new_name = name_cache.get(sym) or _lookup_stock_name(sym)
+                            if new_name:
+                                name_cache[sym] = new_name
+                                wb = _sw.upsert_watchlist_item(
+                                    symbol=sym, 代號=sym,
+                                    name=new_name, 名稱=new_name)
+                                if wb.get("ok"):
+                                    n_filled_trades += 1
+                except Exception as e:
+                    st.warning(f"⚠️ 補名字失敗(部位/損益還是有重算完):{type(e).__name__}: {e}")
+
+            # 記錄完成時間
             import datetime as _dt
             _tw = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8)))
             done_at = _tw.strftime("%Y-%m-%d %H:%M:%S")
             st.session_state["_last_pos_sync"] = done_at
-            st.success(f"✅ 部位+損益重算完成 {done_at}")
+            msg_parts = [f"✅ 重算完成 {done_at}"]
+            if n_filled_pos or n_filled_trades:
+                msg_parts.append(
+                    f"順便補了 {n_filled_pos} 筆部位名稱、"
+                    f"{n_filled_trades} 筆追蹤清單名稱")
+            st.success(" / ".join(msg_parts))
             st.toast("📋 部位+損益已更新", icon="✅")
-        else:
-            st.error(f"❌ {res.get('error')}")
 
     if st.button("🔁 重新整理頁面", use_container_width=True,
                   help="重新讀 Sheet 上的最新時間戳跟資料(等於按 F5)"):
