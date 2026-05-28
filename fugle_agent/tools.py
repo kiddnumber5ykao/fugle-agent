@@ -2702,10 +2702,20 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
                 if attempt == 0:
                     time.sleep(30)   # 等配額重置
                     continue
-            # 其他錯誤直接放棄
-            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            # 其他錯誤直接放棄 — 印 stderr 方便 Actions log debug
+            print(f"⚠️ _fetch_fundamentals API 錯誤 sym={sym}: "
+                  f"{type(e).__name__}: {e}", flush=True)
+            return _store_and_return({
+                "ok": False,
+                "error": f"{type(e).__name__}: {e}",
+            })
     if resp is None:
-        return {"ok": False, "error": f"重試後仍失敗: {last_err}"}
+        print(f"⚠️ _fetch_fundamentals 重試後仍失敗 sym={sym}: {last_err}",
+              flush=True)
+        return _store_and_return({
+            "ok": False,
+            "error": f"重試後仍失敗: {last_err}",
+        })
 
     def _store_and_return(result: dict) -> dict:
         _fundamentals_session_cache[sym] = result
@@ -3001,7 +3011,7 @@ def _organize_v2_positions(do_fundamentals: bool, organized_at: str,
                 }
             else:
                 # 失敗也寫時間戳 + 錯誤訊息,讓使用者知道有試過、看得到原因
-                err_short = str(fd.get("error", "未知錯誤"))[:80]
+                err_short = str(fd.get("error", "未知錯誤"))[:300]
                 fund_payload = {
                     "估值":           f"❌ API 失敗:{err_short}",
                     "配息":           "—",
@@ -3107,7 +3117,7 @@ def _organize_v2_watchlist(do_fundamentals: bool, organized_at: str,
                     "基本面整理時間":   organized_at,
                 }
             else:
-                err_short = str(fd.get("error", "未知錯誤"))[:80]
+                err_short = str(fd.get("error", "未知錯誤"))[:300]
                 fund_payload = {
                     "估值":           f"❌ API 失敗:{err_short}",
                     "配息":           "—",
