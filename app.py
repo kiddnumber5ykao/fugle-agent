@@ -240,13 +240,14 @@ def _latest_analysis_times() -> tuple[str | None, str | None]:
 # ---------------------------------------------------------------------------
 # Helper:透過 GitHub Actions API 觸發背景 workflow
 # ---------------------------------------------------------------------------
-def _trigger_github_workflow(workflow_file: str) -> dict:
+def _trigger_github_workflow(workflow_file: str,
+                              inputs: dict | None = None) -> dict:
     """POST 到 GitHub Actions workflow_dispatch endpoint,讓 workflow 在 GitHub
     那邊跑(完全不佔 Streamlit 資源,使用者可以繼續聊天)。
 
     需要 Streamlit Secrets 設定:
         GITHUB_PAT — fine-grained PAT,scope 至少要包含 Actions read+write
-        GITHUB_REPO — 例如 "kiddnumber5ykao/fugle-agent"(可選,預設用這個)
+        GITHUB_REPO — 例如 "kiddnumber5ykao/fugle-agent"(可選)
     """
     import json as _json
     import urllib.error
@@ -260,9 +261,12 @@ def _trigger_github_workflow(workflow_file: str) -> dict:
 
     url = (f"https://api.github.com/repos/{repo}/actions/workflows/"
            f"{workflow_file}/dispatches")
+    body: dict = {"ref": "main"}
+    if inputs:
+        body["inputs"] = {k: str(v) for k, v in inputs.items()}
     req = urllib.request.Request(
         url,
-        data=_json.dumps({"ref": "main"}).encode("utf-8"),
+        data=_json.dumps(body).encode("utf-8"),
         headers={
             "Accept":               "application/vnd.github+json",
             "Authorization":        f"Bearer {pat}",
@@ -292,21 +296,43 @@ def _trigger_github_workflow(workflow_file: str) -> dict:
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.subheader("🚀 一鍵分析")
-    if st.button("📈 技術分析", use_container_width=True,
-                  help="在 GitHub Actions 背景跑(約 1-2 分鐘),你可以繼續聊天。"):
-        res = _trigger_github_workflow("intraday_technical.yml")
-        if res.get("ok"):
-            st.success("✅ 已觸發!1-2 分鐘後 Sheet 會更新。")
-        else:
-            st.error(f"❌ {res.get('error')}")
+    st.caption("**📈 技術分析**(約 1-2 分鐘)")
+    _tc1, _tc2 = st.columns(2)
+    with _tc1:
+        if st.button("部位", key="btn_tech_pos", use_container_width=True):
+            res = _trigger_github_workflow("intraday_technical.yml",
+                                            inputs={"scope": "positions"})
+            if res.get("ok"):
+                st.success("✅ 部位技術分析已觸發")
+            else:
+                st.error(f"❌ {res.get('error')}")
+    with _tc2:
+        if st.button("追蹤清單", key="btn_tech_wl", use_container_width=True):
+            res = _trigger_github_workflow("intraday_technical.yml",
+                                            inputs={"scope": "watchlist"})
+            if res.get("ok"):
+                st.success("✅ 追蹤清單技術分析已觸發")
+            else:
+                st.error(f"❌ {res.get('error')}")
 
-    if st.button("💎 深度分析", use_container_width=True,
-                  help="在 GitHub Actions 背景跑(約 5-10 分鐘),你可以繼續聊天。"):
-        res = _trigger_github_workflow("daily_deep_analysis.yml")
-        if res.get("ok"):
-            st.success("✅ 已觸發!5-10 分鐘後 Sheet 會更新。")
-        else:
-            st.error(f"❌ {res.get('error')}")
+    st.caption("**💎 深度分析**(約 5-10 分鐘)")
+    _dc1, _dc2 = st.columns(2)
+    with _dc1:
+        if st.button("部位 ", key="btn_deep_pos", use_container_width=True):
+            res = _trigger_github_workflow("daily_deep_analysis.yml",
+                                            inputs={"scope": "positions"})
+            if res.get("ok"):
+                st.success("✅ 部位深度分析已觸發")
+            else:
+                st.error(f"❌ {res.get('error')}")
+    with _dc2:
+        if st.button("追蹤清單 ", key="btn_deep_wl", use_container_width=True):
+            res = _trigger_github_workflow("daily_deep_analysis.yml",
+                                            inputs={"scope": "watchlist"})
+            if res.get("ok"):
+                st.success("✅ 追蹤清單深度分析已觸發")
+            else:
+                st.error(f"❌ {res.get('error')}")
 
     if st.button("📋 重算部位+損益", use_container_width=True,
                   help="剛在股票交易加/改/刪交易後按這個 — 重算股票部位、實際損益、"
