@@ -3,9 +3,19 @@ name: 盤中技術分析 (手動觸發)
 on:
   # 自動排程暫時關閉 — 想啟用就把下面 schedule 那段取消註解
   # schedule:
-  #   - cron: '10 1-6 * * 1-5'   # TW 09:10, 10:10, 11:10, 12:10, 13:10, 14:10
-  #   - cron: '40 1-5 * * 1-5'   # TW 09:40, 10:40, 11:40, 12:40, 13:40
-  workflow_dispatch:   # 手動 / app 按鈕觸發
+  #   - cron: '10 1-6 * * 1-5'
+  #   - cron: '40 1-5 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: '要跑的範圍'
+        type: choice
+        required: false
+        default: all
+        options:
+          - all
+          - positions
+          - watchlist
 
 jobs:
   run:
@@ -29,4 +39,4 @@ jobs:
           SHEETS_WRITER_URL:        ${{ secrets.SHEETS_WRITER_URL }}
           PORTFOLIO_SHEET_URL:      ${{ secrets.PORTFOLIO_SHEET_URL }}
           FUGLE_MOCK: "0"
-        run: python scripts/run_scheduled.py technical
+        run: python scripts/run_scheduled.py technical ${{ inputs.scope || 'all' }}
