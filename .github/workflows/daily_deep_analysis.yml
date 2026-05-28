@@ -3,8 +3,18 @@ name: 每日深度分析 (手動觸發)
 on:
   # 自動排程暫時關閉 — 想啟用就把下面 schedule 那段取消註解
   # schedule:
-  #   - cron: '0 7 * * 1-5'   # TW 15:00 收盤後
-  workflow_dispatch:   # 手動 / app 按鈕觸發
+  #   - cron: '0 7 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: '要跑的範圍'
+        type: choice
+        required: false
+        default: all
+        options:
+          - all
+          - positions
+          - watchlist
 
 jobs:
   run:
@@ -29,4 +39,4 @@ jobs:
           PORTFOLIO_SHEET_URL:      ${{ secrets.PORTFOLIO_SHEET_URL }}
           ANTHROPIC_MODEL:          ${{ secrets.ANTHROPIC_MODEL }}
           FUGLE_MOCK: "0"
-        run: python scripts/run_scheduled.py deep
+        run: python scripts/run_scheduled.py deep ${{ inputs.scope || 'all' }}
