@@ -2639,6 +2639,35 @@ _last_fundamentals_call_ts: float = 0.0
 _fundamentals_session_cache: dict[str, dict] = {}   # sym → result,跨 organize 共用
 
 
+# 抽出到系統提示 → Anthropic 會幫我們 cache,第 2 個 stock 之後便宜 90%。
+_FUNDAMENTALS_SYSTEM_PROMPT = """你是台股基本面查詢助手。對使用者給的代號 + 名稱,用 web_search 查最新資料並彙整。
+
+**只回 JSON**,前後不要任何文字、不要 code fence、不要 ``` 包起來。
+
+JSON 格式(每個欄位都要):
+{
+  "estimate": "估值白話描述,含本益比",
+  "estimate_score": int,
+  "dividend": "配息白話描述",
+  "dividend_score": int,
+  "revenue": "營收動能白話描述",
+  "revenue_score": int,
+  "institutional": "法人籌碼白話描述",
+  "institutional_score": int,
+  "news": "近期 1-2 週新聞重點",
+  "news_score": int
+}
+
+評分標準(全部 int):
+- estimate: 本益比<15→2 / 15-20→1 / 20-25→0 / 25-30→-1 / >30→-2
+- dividend: 殖利率<1%→-1 / 1-3%→0 / 3-5%→1 / >5%→2
+- revenue: 年增率<-10→-2 / -10~0→-1 / 0~10→0 / 10~25→1 / >25→2
+- institutional: 連續賣超→-2 / 賣超→-1 / 持平→0 / 買超→1 / 大買→2
+- news: 重大利空→-2 / 利空→-1 / 中性→0 / 利多→1 / 重大利多→2
+
+用白話、不要術語。資料找不到該項就寫「資料不足」+ score 設 0。"""
+
+
 def _fetch_fundamentals(sym: str, name: str) -> dict:
     """用 Anthropic API + web_search 抓基本面 5 項 + 計算分數。
     沒設 ANTHROPIC_API_KEY 或失敗時回 ok=False。
@@ -2667,23 +2696,9 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
     # (GitHub Actions 沒設 secret 時會把 env var 注成 "")
     model = (os.getenv("ANTHROPIC_MODEL") or "").strip() or "claude-haiku-4-5-20251001"
 
-    prompt = (
-        f"請用 web_search 工具查詢台股 {sym} {name}(如果代號未知名稱就忽略名稱),"
-        "並彙整資訊。**只回 JSON**(前後不要任何文字、不要 code fence),格式:\n\n"
-        "{\n"
-        '  "estimate": "估值描述 (白話,含本益比數字,例:便宜 — 投資人現在花 12 元就能買到公司賺 1 元的能力)",\n'
-        '  "estimate_score": -2 到 +2 整數 (本益比<15→2, 15-20→1, 20-25→0, 25-30→-1, >30→-2),\n'
-        '  "dividend": "配息描述 (例:配息大方、殖利率 4.5%)",\n'
-        '  "dividend_score": -1 到 +2 整數 (殖利率<1%→-1, 1-3%→0, 3-5%→1, >5%→2),\n'
-        '  "revenue": "營收動能描述 (例:公司營收強勁成長、比去年同月多 25%)",\n'
-        '  "revenue_score": -2 到 +2 整數 (依年增率<-10/-10~0/0~10/10~25/>25),\n'
-        '  "institutional": "法人籌碼描述 (例:連 5 天外資都在買、買超 1 萬張)",\n'
-        '  "institutional_score": -2 到 +2 整數 (連續賣超→-2, 賣超→-1, 持平→0, 買超→1, 大買→2),\n'
-        '  "news": "近期 1-2 週新聞重點 (例:利多:拿到 AI 大單)",\n'
-        '  "news_score": -2 到 +2 整數 (重大利空→-2, 利空→-1, 中性→0, 利多→1, 重大利多→2)\n'
-        "}\n\n"
-        "**重要**:用白話描述、不要術語。某項查不到資料就設為「資料不足」+ score=0。"
-    )
+    # 🚀 Token 優化:長指令搬到 system prompt + cache_control
+    # 第 1 檔正常付費,後面 11 檔 system 部分便宜 90%(Anthropic prompt caching)
+    user_msg = f"查台股 {sym} {name}".strip()
 
     # 主呼叫 + 429 重試:遇到 RateLimitError 就 sleep 30 秒重試一次
     resp = None
@@ -2693,8 +2708,13 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
             resp = client.messages.create(
                 model=model,
                 max_tokens=2000,
+                system=[{
+                    "type": "text",
+                    "text": _FUNDAMENTALS_SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }],
                 tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 4}],
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": user_msg}],
             )
             break
         except Exception as e:
@@ -2973,15 +2993,21 @@ def _build_existing_lights_map(source: str) -> dict[str, dict]:
 
 def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                             organized_at: str, fee_rate: float, fee_min: float,
-                            signals_cache: dict[str, dict] | None = None) -> dict:
+                            signals_cache: dict[str, dict] | None = None,
+                            symbols_filter: set | None = None) -> dict:
     """跑股票部位的整理 — 技術跟基本面**分開更新**。
     - update_technical=True:寫 現價/市值/損益/6 個技術描述/2 個技術燈號/技術整理時間
     - update_fundamentals=True:寫 5 個基本面描述/2 個基本面燈號/基本面整理時間
     - 綜合建議**永遠更新**(用本次新算 + 另一邊從 Sheet 讀的舊燈號)
+    - symbols_filter:list/set,只處理指定代號(失敗重跑用)
     """
     positions = sheets.load_positions()
     if positions and positions[0].get("_error"):
         return {"error": positions[0]["_error"]}
+    # 失敗重跑單檔用 — 只留 symbols_filter 裡的
+    if symbols_filter:
+        positions = [p for p in positions
+                     if str(p.get("symbol", "")).strip() in symbols_filter]
 
     # 只跑一邊時,需要從 Sheet 讀另一邊的舊燈號才能算「綜合建議」
     existing_lights = (_build_existing_lights_map("positions")
@@ -3135,11 +3161,16 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
 
 def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                             organized_at: str,
-                            signals_cache: dict[str, dict] | None = None) -> dict:
-    """跑追蹤清單的整理 — 技術跟基本面**分開更新**(對應 _organize_v2_positions)。"""
+                            signals_cache: dict[str, dict] | None = None,
+                            symbols_filter: set | None = None) -> dict:
+    """跑追蹤清單的整理 — 技術跟基本面**分開更新**(對應 _organize_v2_positions)。
+    symbols_filter:只處理指定代號(失敗重跑用)。"""
     rows = sheets.load_watchlist()
     if rows and rows[0].get("_error"):
         return {"error": rows[0]["_error"]}
+    if symbols_filter:
+        rows = [r for r in rows
+                if str(r.get("symbol") or r.get("代號") or "").strip() in symbols_filter]
 
     existing_lights = (_build_existing_lights_map("watchlist")
                        if not (update_technical and update_fundamentals)
@@ -3280,36 +3311,56 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
     {"type": "object", "properties": {}, "required": []},
 )
 async def organize_all_technical(args: dict) -> dict:
+    """可選參數:
+      - scope: 'all'(預設) / 'positions' / 'watchlist'
+      - symbols: list[str],只跑指定代號(失敗單檔重跑用,例如 ['2330'])
+    """
     organized_at = _now_tw_str()
     fee_rate = float(os.getenv("USER_FEE_RATE", "0.001425"))
     fee_min  = float(os.getenv("USER_FEE_MIN", "1"))
-    # 先同步部位
-    sync_res = sheets_writer.manual_sync()
-    # 🚀 一次並行抓 positions + watchlist 所有 sym 的 K 線(去重)
+    scope = (args or {}).get("scope", "all")
+    do_pos = scope in ("all", "positions")
+    do_wl  = scope in ("all", "watchlist")
+    symbols_filter = set(str(s).strip() for s in (args or {}).get("symbols", []) if s)
+
+    # 只在跑「部位」時做 manual_sync(那個跟交易紀錄綁,跟追蹤清單無關)
+    sync_res = None
+    if do_pos:
+        sync_res = sheets_writer.manual_sync()
+
+    # 並行抓需要的 sym 的 K 線
     all_syms: set[str] = set()
     try:
-        for p in (sheets.load_positions() or []):
-            s = str(p.get("symbol", "")).strip()
-            if s and not p.get("_error"):
-                all_syms.add(s)
-        for w in (sheets.load_watchlist() or []):
-            s = str(w.get("symbol") or w.get("代號") or "").strip()
-            if s and not w.get("_error"):
-                all_syms.add(s)
+        if do_pos:
+            for p in (sheets.load_positions() or []):
+                s = str(p.get("symbol", "")).strip()
+                if s and not p.get("_error"):
+                    all_syms.add(s)
+        if do_wl:
+            for w in (sheets.load_watchlist() or []):
+                s = str(w.get("symbol") or w.get("代號") or "").strip()
+                if s and not w.get("_error"):
+                    all_syms.add(s)
     except Exception:
         pass
     signals_cache = _prefetch_signals_parallel(list(all_syms))
 
-    pos = _organize_v2_positions(update_technical=True, update_fundamentals=False,
-                                  organized_at=organized_at,
-                                  fee_rate=fee_rate, fee_min=fee_min,
-                                  signals_cache=signals_cache)
-    wl = _organize_v2_watchlist(update_technical=True, update_fundamentals=False,
-                                 organized_at=organized_at,
-                                 signals_cache=signals_cache)
+    pos = wl = None
+    if do_pos:
+        pos = _organize_v2_positions(update_technical=True, update_fundamentals=False,
+                                      organized_at=organized_at,
+                                      fee_rate=fee_rate, fee_min=fee_min,
+                                      signals_cache=signals_cache,
+                                      symbols_filter=symbols_filter or None)
+    if do_wl:
+        wl = _organize_v2_watchlist(update_technical=True, update_fundamentals=False,
+                                     organized_at=organized_at,
+                                     signals_cache=signals_cache,
+                                     symbols_filter=symbols_filter or None)
     return _envelope({
         "ok":           True,
         "deep":         False,
+        "scope":        scope,
         "organized_at": organized_at,
         "sync":         sync_res,
         "n_signals":    len(signals_cache),
@@ -3328,42 +3379,63 @@ async def organize_all_technical(args: dict) -> dict:
     {"type": "object", "properties": {}, "required": []},
 )
 async def organize_all_deep(args: dict) -> dict:
+    """可選參數:
+      - scope: 'all'(預設) / 'positions' / 'watchlist'
+      - symbols: list[str],只跑指定代號(失敗單檔重跑用)
+    """
     organized_at = _now_tw_str()
     fee_rate = float(os.getenv("USER_FEE_RATE", "0.001425"))
     fee_min  = float(os.getenv("USER_FEE_MIN", "1"))
-    # 先同步股票部位
-    sync_res = sheets_writer.manual_sync()
+    scope = (args or {}).get("scope", "all")
+    do_pos = scope in ("all", "positions")
+    do_wl  = scope in ("all", "watchlist")
+    symbols_filter = set(str(s).strip() for s in (args or {}).get("symbols", []) if s)
 
-    # 🚀 加速:把股票部位 + 追蹤清單的所有代號一次性收集,並行抓基本面
-    # (cache 跨 positions/watchlist 共用,同一檔只抓一次)
+    # manual_sync 只跟部位有關 — 而且單檔重跑時不需要(只重跑特定 sym)
+    sync_res = None
+    if do_pos and not symbols_filter:
+        sync_res = sheets_writer.manual_sync()
+
+    # 收集要 prefetch 基本面的 (sym, name) — 限定 scope + symbols_filter
     _fundamentals_session_cache.clear()
     items_to_prefetch: list[tuple[str, str]] = []
     try:
-        for p in (sheets.load_positions() or []):
-            sym = str(p.get("symbol", "")).strip()
-            if sym and not (p.get("_error")):
-                name = str(p.get("name") or "").strip() or _lookup_stock_name(sym)
-                items_to_prefetch.append((sym, name))
-        for w in (sheets.load_watchlist() or []):
-            sym = str(w.get("symbol") or w.get("代號") or "").strip()
-            if sym and not (w.get("_error")):
-                name = str(w.get("name") or w.get("名稱") or "").strip() or _lookup_stock_name(sym)
-                items_to_prefetch.append((sym, name))
+        if do_pos:
+            for p in (sheets.load_positions() or []):
+                sym = str(p.get("symbol", "")).strip()
+                if sym and not (p.get("_error")):
+                    if symbols_filter and sym not in symbols_filter:
+                        continue
+                    name = str(p.get("name") or "").strip() or _lookup_stock_name(sym)
+                    items_to_prefetch.append((sym, name))
+        if do_wl:
+            for w in (sheets.load_watchlist() or []):
+                sym = str(w.get("symbol") or w.get("代號") or "").strip()
+                if sym and not (w.get("_error")):
+                    if symbols_filter and sym not in symbols_filter:
+                        continue
+                    name = str(w.get("name") or w.get("名稱") or "").strip() or _lookup_stock_name(sym)
+                    items_to_prefetch.append((sym, name))
     except Exception:
         pass
     _prefetch_fundamentals_parallel(items_to_prefetch)
 
-    # 深度只跑基本面,**不重算**技術(綜合建議會讀 Sheet 上的舊燈號去算)
-    pos = _organize_v2_positions(update_technical=False, update_fundamentals=True,
-                                  organized_at=organized_at,
-                                  fee_rate=fee_rate, fee_min=fee_min,
-                                  signals_cache=None)
-    wl = _organize_v2_watchlist(update_technical=False, update_fundamentals=True,
-                                 organized_at=organized_at,
-                                 signals_cache=None)
+    pos = wl = None
+    if do_pos:
+        pos = _organize_v2_positions(update_technical=False, update_fundamentals=True,
+                                      organized_at=organized_at,
+                                      fee_rate=fee_rate, fee_min=fee_min,
+                                      signals_cache=None,
+                                      symbols_filter=symbols_filter or None)
+    if do_wl:
+        wl = _organize_v2_watchlist(update_technical=False, update_fundamentals=True,
+                                     organized_at=organized_at,
+                                     signals_cache=None,
+                                     symbols_filter=symbols_filter or None)
     return _envelope({
         "ok":              True,
         "deep":            True,
+        "scope":           scope,
         "organized_at":    organized_at,
         "sync":            sync_res,
         "n_prefetched":    len(items_to_prefetch),
