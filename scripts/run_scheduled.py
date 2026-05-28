@@ -44,25 +44,27 @@ def _check_env() -> None:
 
 def main() -> None:
     mode = (sys.argv[1] if len(sys.argv) > 1 else "technical").lower().strip()
+    scope = (sys.argv[2] if len(sys.argv) > 2 else "all").lower().strip()
     if mode not in ("technical", "deep"):
         print(f"❌ 不認識的模式: {mode!r} (要 'technical' 或 'deep')")
         sys.exit(2)
+    if scope not in ("all", "positions", "watchlist"):
+        print(f"❌ 不認識的範圍: {scope!r} (要 'all' / 'positions' / 'watchlist')")
+        sys.exit(2)
 
     _check_env()
-
-    # 強制非 mock 模式
     os.environ.setdefault("FUGLE_MOCK", "0")
 
-    # Lazy import 避免 ENV 還沒設定就讀 SETTINGS
     from fugle_agent.tools import organize_all_technical, organize_all_deep
 
     t0 = datetime.datetime.now()
-    print(f"▶️  開始跑 {mode} 分析 @ {t0.isoformat(timespec='seconds')}")
+    print(f"▶️  開始跑 {mode}/{scope} @ {t0.isoformat(timespec='seconds')}")
 
+    args = {"scope": scope}
     if mode == "technical":
-        result = asyncio.run(organize_all_technical.handler({}))
+        result = asyncio.run(organize_all_technical.handler(args))
     else:
-        result = asyncio.run(organize_all_deep.handler({}))
+        result = asyncio.run(organize_all_deep.handler(args))
 
     dt = (datetime.datetime.now() - t0).total_seconds()
     print(f"✅ {mode} 跑完 @ +{dt:.1f}s")
