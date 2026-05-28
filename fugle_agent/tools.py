@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -2628,9 +2629,23 @@ def _super_short_term_light(signals: dict) -> str:
     return "🔴 看衰"
 
 
+# 全域節流 — 每次呼叫 _fetch_fundamentals 之間至少間隔這麼多秒
+# 避免一次性吃光 Anthropic Tier 1 的 RPM / TPM 配額(50K input tokens/min)
+_FETCH_FUNDAMENTALS_GAP_SEC = 6
+_last_fundamentals_call_ts: float = 0.0
+
+
 def _fetch_fundamentals(sym: str, name: str) -> dict:
     """用 Anthropic API + web_search 抓基本面 5 項 + 計算分數。
-    沒設 ANTHROPIC_API_KEY 或失敗時回 ok=False。"""
+    沒設 ANTHROPIC_API_KEY 或失敗時回 ok=False。
+    內建節流:每次呼叫之間強制間隔 6 秒,避免 429。"""
+    global _last_fundamentals_call_ts
+    # 節流:距離上次呼叫不到 6 秒就 sleep 補滿
+    elapsed = time.time() - _last_fundamentals_call_ts
+    if elapsed < _FETCH_FUNDAMENTALS_GAP_SEC:
+        time.sleep(_FETCH_FUNDAMENTALS_GAP_SEC - elapsed)
+    _last_fundamentals_call_ts = time.time()
+
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
         return {"ok": False, "error": "ANTHROPIC_API_KEY 未設"}
@@ -2660,13 +2675,31 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
         "**重要**:用白話描述、不要術語。某項查不到資料就設為「資料不足」+ score=0。"
     )
 
+    # 主呼叫 + 429 重試:遇到 RateLimitError 就 sleep 30 秒重試一次
+    resp = None
+    last_err = None
+    for attempt in range(2):
+        try:
+            resp = client.messages.create(
+                model=model,
+                max_tokens=2000,
+                tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 4}],
+                messages=[{"role": "user", "content": prompt}],
+            )
+            break
+        except Exception as e:
+            last_err = e
+            err_str = str(e).lower()
+            if "429" in err_str or "rate" in err_str or "rate_limit" in err_str:
+                if attempt == 0:
+                    time.sleep(30)   # 等配額重置
+                    continue
+            # 其他錯誤直接放棄
+            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    if resp is None:
+        return {"ok": False, "error": f"重試後仍失敗: {last_err}"}
+
     try:
-        resp = client.messages.create(
-            model=model,
-            max_tokens=2000,
-            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 4}],
-            messages=[{"role": "user", "content": prompt}],
-        )
         text = ""
         for block in resp.content:
             if hasattr(block, "text") and block.text:
