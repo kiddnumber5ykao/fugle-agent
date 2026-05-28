@@ -308,6 +308,19 @@ with st.sidebar:
         else:
             st.error(f"❌ {res.get('error')}")
 
+    if st.button("📋 重算部位+損益", use_container_width=True,
+                  help="剛在股票交易加/改/刪交易後按這個 — 直接打 Apps Script 重算"
+                       "股票部位、實際損益、5/10/15/20% 目標賣價公式,5-10 秒。"):
+        try:
+            from fugle_agent import sheets_writer as _sw
+            res = _sw.manual_sync()
+            if res.get("ok"):
+                st.success("✅ 部位+損益已重新整理完成")
+            else:
+                st.error(f"❌ {res.get('error')}")
+        except Exception as e:
+            st.error(f"❌ {type(e).__name__}: {e}")
+
     if st.button("🔁 重整時間", use_container_width=True,
                   help="重新讀 Sheet 上的最新時間戳"):
         st.rerun()
