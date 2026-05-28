@@ -2631,16 +2631,24 @@ def _super_short_term_light(signals: dict) -> str:
 
 # 全域節流 — 每次呼叫 _fetch_fundamentals 之間至少間隔這麼多秒
 # 避免一次性吃光 Anthropic Tier 1 的 RPM / TPM 配額(50K input tokens/min)
-_FETCH_FUNDAMENTALS_GAP_SEC = 6
+# 在並行模式下這個 gap 變成「兩個 thread 之間的最小間隔」,實際整體節奏由
+# ThreadPoolExecutor(max_workers) 控制。
+_FETCH_FUNDAMENTALS_GAP_SEC = 2   # 並行模式下可以縮短
+_FETCH_PARALLEL_WORKERS = 3        # 同時跑 3 檔
 _last_fundamentals_call_ts: float = 0.0
+_fundamentals_session_cache: dict[str, dict] = {}   # sym → result,跨 organize 共用
 
 
 def _fetch_fundamentals(sym: str, name: str) -> dict:
     """用 Anthropic API + web_search 抓基本面 5 項 + 計算分數。
     沒設 ANTHROPIC_API_KEY 或失敗時回 ok=False。
-    內建節流:每次呼叫之間強制間隔 6 秒,避免 429。"""
+    內建節流避免 429,並支援同 session 快取(同一檔不重複查)。"""
     global _last_fundamentals_call_ts
-    # 節流:距離上次呼叫不到 6 秒就 sleep 補滿
+    # Session 快取:同一檔在同一次 deep analysis 內如果已查過,直接回傳
+    if sym in _fundamentals_session_cache:
+        return _fundamentals_session_cache[sym]
+
+    # 節流(對並行也有效,因為這是 module-level 全域變數,有 GIL 保護)
     elapsed = time.time() - _last_fundamentals_call_ts
     if elapsed < _FETCH_FUNDAMENTALS_GAP_SEC:
         time.sleep(_FETCH_FUNDAMENTALS_GAP_SEC - elapsed)
@@ -2699,6 +2707,10 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
     if resp is None:
         return {"ok": False, "error": f"重試後仍失敗: {last_err}"}
 
+    def _store_and_return(result: dict) -> dict:
+        _fundamentals_session_cache[sym] = result
+        return result
+
     try:
         text = ""
         for block in resp.content:
@@ -2710,7 +2722,7 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
             lines = text.split("\n")
             text = "\n".join(lines[1:-1] if lines[-1].strip().startswith("```") else lines[1:])
         data = json.loads(text.strip())
-        return {
+        return _store_and_return({
             "ok":                  True,
             "estimate":            str(data.get("estimate", "資料不足")),
             "dividend":            str(data.get("dividend", "資料不足")),
@@ -2722,9 +2734,50 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
             "revenue_score":       int(data.get("revenue_score", 0) or 0),
             "institutional_score": int(data.get("institutional_score", 0) or 0),
             "news_score":          int(data.get("news_score", 0) or 0),
-        }
+        })
     except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return _store_and_return({"ok": False, "error": f"{type(e).__name__}: {e}"})
+
+
+_COMPUTE_PARALLEL_WORKERS = 6   # 技術分析 Fugle K 線抓取並行數
+
+
+def _prefetch_signals_parallel(syms: list[str]) -> dict[str, dict]:
+    """並行抓 K 線 + 算技術訊號 — 用 ThreadPoolExecutor 同時開 6 個。
+    回傳 {sym: signals_dict}。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    out: dict[str, dict] = {}
+    if not syms:
+        return out
+    with ThreadPoolExecutor(max_workers=_COMPUTE_PARALLEL_WORKERS) as pool:
+        futures = {pool.submit(_compute_short_signals, s): s for s in syms}
+        for fut in as_completed(futures):
+            sym = futures[fut]
+            try:
+                out[sym] = fut.result()
+            except Exception as e:
+                out[sym] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return out
+
+
+def _prefetch_fundamentals_parallel(items: list[tuple[str, str]]) -> None:
+    """並行抓 fundamentals — items 是 [(sym, name), ...]。
+    結果直接寫進 _fundamentals_session_cache。同 sym 只抓一次。
+    用 ThreadPoolExecutor 開 _FETCH_PARALLEL_WORKERS 個工作緒同時跑。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    todo: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for sym, name in items:
+        if not sym or sym in seen or sym in _fundamentals_session_cache:
+            continue
+        seen.add(sym)
+        todo.append((sym, name))
+    if not todo:
+        return
+    with ThreadPoolExecutor(max_workers=_FETCH_PARALLEL_WORKERS) as pool:
+        futures = [pool.submit(_fetch_fundamentals, s, n) for s, n in todo]
+        for _ in as_completed(futures):
+            pass   # 結果已經寫進 cache,不需要在這裡蒐集
 
 
 def _company_light_v2(fund: dict) -> str:
@@ -2830,11 +2883,24 @@ def _combined_advice(short_light: str, super_short_light: str,
 
 
 def _organize_v2_positions(do_fundamentals: bool, organized_at: str,
-                            fee_rate: float, fee_min: float) -> dict:
-    """跑股票部位的整理 — 寫回 v2 schema 欄位。"""
+                            fee_rate: float, fee_min: float,
+                            signals_cache: dict[str, dict] | None = None) -> dict:
+    """跑股票部位的整理 — 寫回 v2 schema 欄位。
+    可選 signals_cache:外部已經並行算好的 {sym: signals},直接用。"""
     positions = sheets.load_positions()
     if positions and positions[0].get("_error"):
         return {"error": positions[0]["_error"]}
+
+    # 若沒提供外部 cache,自己並行抓所有要算的 sym
+    if signals_cache is None:
+        syms_to_compute = [
+            str(p.get("symbol", "")).strip()
+            for p in positions
+            if str(p.get("symbol", "")).strip()
+            and int(p.get("shares") or 0) > 0
+            and float(p.get("total_cost") or 0) > 0
+        ]
+        signals_cache = _prefetch_signals_parallel(syms_to_compute)
 
     results = []
     n_ok = n_fail = 0
@@ -2846,7 +2912,7 @@ def _organize_v2_positions(do_fundamentals: bool, organized_at: str,
         if shares <= 0 or total_cost <= 0:
             continue
 
-        signals = _compute_short_signals(sym)
+        signals = signals_cache.get(sym) or _compute_short_signals(sym)
         if not signals.get("ok"):
             n_fail += 1
             results.append({"symbol": sym, "name": name, "error": signals.get("error")})
@@ -2925,11 +2991,22 @@ def _organize_v2_positions(do_fundamentals: bool, organized_at: str,
     return {"n": len(results), "n_ok": n_ok, "n_fail": n_fail, "items": results}
 
 
-def _organize_v2_watchlist(do_fundamentals: bool, organized_at: str) -> dict:
-    """跑追蹤清單的整理 — 寫回 v2 schema 欄位。"""
+def _organize_v2_watchlist(do_fundamentals: bool, organized_at: str,
+                            signals_cache: dict[str, dict] | None = None) -> dict:
+    """跑追蹤清單的整理 — 寫回 v2 schema 欄位。
+    可選 signals_cache:外部已經並行算好的 {sym: signals}。"""
     rows = sheets.load_watchlist()
     if rows and rows[0].get("_error"):
         return {"error": rows[0]["_error"]}
+
+    # 若沒提供外部 cache,自己並行抓
+    if signals_cache is None:
+        syms = [
+            str(r.get("symbol") or r.get("代號") or "").strip()
+            for r in rows
+            if str(r.get("symbol") or r.get("代號") or "").strip()
+        ]
+        signals_cache = _prefetch_signals_parallel(syms)
 
     results = []
     n_ok = n_fail = 0
@@ -2939,7 +3016,7 @@ def _organize_v2_watchlist(do_fundamentals: bool, organized_at: str) -> dict:
             continue
         name = str(row.get("name") or row.get("名稱") or "").strip() or _lookup_stock_name(sym)
 
-        signals = _compute_short_signals(sym)
+        signals = signals_cache.get(sym) or _compute_short_signals(sym)
         if not signals.get("ok"):
             n_fail += 1
             results.append({"symbol": sym, "name": name, "error": signals.get("error")})
@@ -3017,17 +3094,35 @@ async def organize_all_technical(args: dict) -> dict:
     organized_at = _now_tw_str()
     fee_rate = float(os.getenv("USER_FEE_RATE", "0.001425"))
     fee_min  = float(os.getenv("USER_FEE_MIN", "1"))
-    # 先確保股票部位從股票交易同步好(沒部位的話技術分析無從跑起)
+    # 先同步部位
     sync_res = sheets_writer.manual_sync()
+    # 🚀 一次並行抓 positions + watchlist 所有 sym 的 K 線(去重)
+    all_syms: set[str] = set()
+    try:
+        for p in (sheets.load_positions() or []):
+            s = str(p.get("symbol", "")).strip()
+            if s and not p.get("_error"):
+                all_syms.add(s)
+        for w in (sheets.load_watchlist() or []):
+            s = str(w.get("symbol") or w.get("代號") or "").strip()
+            if s and not w.get("_error"):
+                all_syms.add(s)
+    except Exception:
+        pass
+    signals_cache = _prefetch_signals_parallel(list(all_syms))
+
     pos = _organize_v2_positions(do_fundamentals=False,
                                   organized_at=organized_at,
-                                  fee_rate=fee_rate, fee_min=fee_min)
-    wl = _organize_v2_watchlist(do_fundamentals=False, organized_at=organized_at)
+                                  fee_rate=fee_rate, fee_min=fee_min,
+                                  signals_cache=signals_cache)
+    wl = _organize_v2_watchlist(do_fundamentals=False, organized_at=organized_at,
+                                 signals_cache=signals_cache)
     return _envelope({
         "ok":           True,
         "deep":         False,
         "organized_at": organized_at,
         "sync":         sync_res,
+        "n_signals":    len(signals_cache),
         "positions":    pos,
         "watchlist":    wl,
     })
@@ -3048,18 +3143,110 @@ async def organize_all_deep(args: dict) -> dict:
     fee_min  = float(os.getenv("USER_FEE_MIN", "1"))
     # 先同步股票部位
     sync_res = sheets_writer.manual_sync()
+
+    # 🚀 加速:把股票部位 + 追蹤清單的所有代號一次性收集,並行抓基本面
+    # (cache 跨 positions/watchlist 共用,同一檔只抓一次)
+    _fundamentals_session_cache.clear()
+    items_to_prefetch: list[tuple[str, str]] = []
+    try:
+        for p in (sheets.load_positions() or []):
+            sym = str(p.get("symbol", "")).strip()
+            if sym and not (p.get("_error")):
+                name = str(p.get("name") or "").strip() or _lookup_stock_name(sym)
+                items_to_prefetch.append((sym, name))
+        for w in (sheets.load_watchlist() or []):
+            sym = str(w.get("symbol") or w.get("代號") or "").strip()
+            if sym and not (w.get("_error")):
+                name = str(w.get("name") or w.get("名稱") or "").strip() or _lookup_stock_name(sym)
+                items_to_prefetch.append((sym, name))
+    except Exception:
+        pass
+    _prefetch_fundamentals_parallel(items_to_prefetch)
+
+    # 也並行抓技術訊號(共用 cache)
+    signals_cache = _prefetch_signals_parallel([s for s, _ in items_to_prefetch])
+
     pos = _organize_v2_positions(do_fundamentals=True,
                                   organized_at=organized_at,
-                                  fee_rate=fee_rate, fee_min=fee_min)
-    wl = _organize_v2_watchlist(do_fundamentals=True, organized_at=organized_at)
+                                  fee_rate=fee_rate, fee_min=fee_min,
+                                  signals_cache=signals_cache)
+    wl = _organize_v2_watchlist(do_fundamentals=True, organized_at=organized_at,
+                                 signals_cache=signals_cache)
     return _envelope({
-        "ok":           True,
-        "deep":         True,
-        "organized_at": organized_at,
-        "sync":         sync_res,
-        "positions":    pos,
-        "watchlist":    wl,
+        "ok":              True,
+        "deep":            True,
+        "organized_at":    organized_at,
+        "sync":            sync_res,
+        "n_prefetched":    len(items_to_prefetch),
+        "positions":       pos,
+        "watchlist":       wl,
     })
+
+
+@tool(
+    "what_to_do_now",
+    "**「此刻要做什麼」按鈕專用** — 不重新分析,直接讀 Sheet 上現有的 v2 燈號 + 綜合建議,"
+    "整理出**今天該注意/該動手**的清單。看的欄位:短線燈號、超短線燈號、籌碼面燈號、公司面燈號、綜合建議。"
+    "回傳會分成 3 區:🟢 看好的部位/追蹤、🔴 看衰的部位、🟢 追蹤清單可進場。"
+    "**使用者按按鈕、或說「我現在該做什麼」「現在該動哪些」直接呼叫**。",
+    {"type": "object", "properties": {}, "required": []},
+)
+async def what_to_do_now(args: dict) -> dict:
+    """直接讀 Sheet 的燈號欄位,不打 Fugle、不打 Anthropic。秒回。"""
+    out = {
+        "positions_buy_signal":  [],  # 部位 + 短線 🟢
+        "positions_sell_signal": [],  # 部位 + 短線 🔴 或 綜合建議含「出場/停損」
+        "watchlist_buy_signal":  [],  # 追蹤 + 短線 🟢
+        "watchlist_avoid":       [],  # 追蹤 + 短線 🔴
+        "deep_analysis_at":      None,
+    }
+
+    def _light(v: str | None) -> str:
+        s = str(v or "")
+        if "🟢" in s: return "🟢"
+        if "🟡" in s: return "🟡"
+        if "🔴" in s: return "🔴"
+        return "—"
+
+    try:
+        for p in (sheets.load_positions() or []):
+            if p.get("_error"):
+                continue
+            sym = str(p.get("symbol", "")).strip()
+            if not sym:
+                continue
+            short = _light(p.get("短線燈號") or p.get("short_light"))
+            advice = str(p.get("綜合建議") or "").strip()
+            name = str(p.get("name") or p.get("名稱") or "").strip()
+            entry = {"symbol": sym, "name": name, "advice": advice,
+                     "pnl_pct": p.get("損益%") or p.get("pnl_pct")}
+            if short == "🟢":
+                out["positions_buy_signal"].append(entry)
+            if short == "🔴" or any(k in advice for k in ("出場", "停損", "減碼", "停利")):
+                out["positions_sell_signal"].append(entry)
+
+        for w in (sheets.load_watchlist() or []):
+            if w.get("_error"):
+                continue
+            sym = str(w.get("symbol") or w.get("代號") or "").strip()
+            if not sym:
+                continue
+            short = _light(w.get("短線燈號"))
+            advice = str(w.get("綜合建議") or "").strip()
+            name = str(w.get("name") or w.get("名稱") or "").strip()
+            entry = {"symbol": sym, "name": name, "advice": advice}
+            if short == "🟢":
+                out["watchlist_buy_signal"].append(entry)
+            elif short == "🔴":
+                out["watchlist_avoid"].append(entry)
+            # 取最新的「基本面整理時間」當深度分析時間
+            t = str(w.get("基本面整理時間") or "").strip()
+            if t and (out["deep_analysis_at"] is None or t > out["deep_analysis_at"]):
+                out["deep_analysis_at"] = t
+    except Exception as e:
+        return _envelope({"error": f"{type(e).__name__}: {e}"})
+
+    return _envelope(out)
 
 
 @tool(
@@ -3091,6 +3278,7 @@ ALL_TOOLS = [
     get_watchlist,
     organize_all_technical,
     organize_all_deep,
+    what_to_do_now,
     compute_target_sell_prices,
     ping_sheets_writer,
     get_us_quote,
