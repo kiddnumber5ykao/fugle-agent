@@ -2712,16 +2712,33 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
         return result
 
     try:
-        text = ""
-        for block in resp.content:
-            if hasattr(block, "text") and block.text:
-                text += block.text
-        text = text.strip()
-        # Strip markdown code fence if present
-        if text.startswith("```"):
-            lines = text.split("\n")
-            text = "\n".join(lines[1:-1] if lines[-1].strip().startswith("```") else lines[1:])
-        data = json.loads(text.strip())
+        # 🛡️ Anthropic web_search 模式下會有多個 text block(每次 search 前後都有
+        # 思考文字),我們只要**最後一個** text block — 那才是 LLM 真正的 JSON 輸出
+        text_blocks = [b.text for b in resp.content
+                       if hasattr(b, "text") and b.text]
+        text = (text_blocks[-1] if text_blocks else "").strip()
+
+        # 🛡️ 三層 JSON 萃取(防 Haiku 亂回):
+        # 1) 直接 parse
+        # 2) Strip markdown code fence
+        # 3) 抓最外層 { ... } 子字串
+        data = None
+        for attempt_text in _iter_json_candidates(text):
+            try:
+                data = json.loads(attempt_text)
+                break
+            except json.JSONDecodeError:
+                continue
+
+        if data is None:
+            # 把原始回應印出來方便 debug(Actions log 看得到)
+            print(f"⚠️ _fetch_fundamentals JSON 解析失敗,sym={sym}",
+                  f"raw_text 前 300 字:{text[:300]!r}", flush=True)
+            return _store_and_return({
+                "ok": False,
+                "error": f"JSON 解析失敗:{text[:100]!r}",
+            })
+
         return _store_and_return({
             "ok":                  True,
             "estimate":            str(data.get("estimate", "資料不足")),
@@ -2729,14 +2746,47 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
             "revenue":             str(data.get("revenue", "資料不足")),
             "institutional":       str(data.get("institutional", "資料不足")),
             "news":                str(data.get("news", "資料不足")),
-            "estimate_score":      int(data.get("estimate_score", 0) or 0),
-            "dividend_score":      int(data.get("dividend_score", 0) or 0),
-            "revenue_score":       int(data.get("revenue_score", 0) or 0),
-            "institutional_score": int(data.get("institutional_score", 0) or 0),
-            "news_score":          int(data.get("news_score", 0) or 0),
+            "estimate_score":      _safe_int(data.get("estimate_score")),
+            "dividend_score":      _safe_int(data.get("dividend_score")),
+            "revenue_score":       _safe_int(data.get("revenue_score")),
+            "institutional_score": _safe_int(data.get("institutional_score")),
+            "news_score":          _safe_int(data.get("news_score")),
         })
     except Exception as e:
+        print(f"⚠️ _fetch_fundamentals 例外 sym={sym}: {type(e).__name__}: {e}",
+              flush=True)
         return _store_and_return({"ok": False, "error": f"{type(e).__name__}: {e}"})
+
+
+def _iter_json_candidates(text: str):
+    """產生 JSON 解析候選字串。"""
+    # 1) 原文直接 try
+    yield text
+    # 2) Strip markdown code fence ```json ... ``` 或 ``` ... ```
+    stripped = text
+    if stripped.startswith("```"):
+        lines = stripped.split("\n")
+        # 第一行 ```json 或 ```,丟掉
+        lines = lines[1:]
+        # 最後一行 ``` 也丟掉
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        yield "\n".join(lines).strip()
+    # 3) 抓最外層 { ... } 子字串
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        yield text[start:end + 1]
+
+
+def _safe_int(v) -> int:
+    """容錯把任何東西轉成 int — None / 空字串 / 浮點 / 帶 "+" 號的字串都吞。"""
+    if v is None:
+        return 0
+    try:
+        return int(float(str(v).strip().replace("+", "")))
+    except (ValueError, TypeError):
+        return 0
 
 
 _COMPUTE_PARALLEL_WORKERS = 6   # 技術分析 Fugle K 線抓取並行數
@@ -2949,6 +2999,19 @@ def _organize_v2_positions(do_fundamentals: bool, organized_at: str,
                     "公司面燈號":      company_light,
                     "基本面整理時間":   organized_at,
                 }
+            else:
+                # 失敗也寫時間戳 + 錯誤訊息,讓使用者知道有試過、看得到原因
+                err_short = str(fd.get("error", "未知錯誤"))[:80]
+                fund_payload = {
+                    "估值":           f"❌ API 失敗:{err_short}",
+                    "配息":           "—",
+                    "營收動能":        "—",
+                    "法人籌碼":        "—",
+                    "近期新聞重點":    "—",
+                    "籌碼面燈號":      "—",
+                    "公司面燈號":      "—",
+                    "基本面整理時間":   f"{organized_at} (失敗)",
+                }
 
         advice = _combined_advice(short_light, super_light, chips_light, company_light,
                                    is_position=True)
@@ -3042,6 +3105,18 @@ def _organize_v2_watchlist(do_fundamentals: bool, organized_at: str,
                     "籌碼面燈號":      chips_light,
                     "公司面燈號":      company_light,
                     "基本面整理時間":   organized_at,
+                }
+            else:
+                err_short = str(fd.get("error", "未知錯誤"))[:80]
+                fund_payload = {
+                    "估值":           f"❌ API 失敗:{err_short}",
+                    "配息":           "—",
+                    "營收動能":        "—",
+                    "法人籌碼":        "—",
+                    "近期新聞重點":    "—",
+                    "籌碼面燈號":      "—",
+                    "公司面燈號":      "—",
+                    "基本面整理時間":   f"{organized_at} (失敗)",
                 }
 
         advice = _combined_advice(short_light, super_light, chips_light, company_light,
