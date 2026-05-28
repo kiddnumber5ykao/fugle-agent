@@ -1,15 +1,15 @@
-name: 每日深度分析 (週一~五 收盤後 15:00)
+name: 每日深度分析 (手動觸發)
 
 on:
-  schedule:
-    # TW 15:00 (收盤後 30 分鐘) = UTC 07:00,週一到週五
-    - cron: '0 7 * * 1-5'
-  workflow_dispatch:   # 手動觸發按鈕
+  # 自動排程暫時關閉 — 想啟用就把下面 schedule 那段取消註解
+  # schedule:
+  #   - cron: '0 7 * * 1-5'   # TW 15:00 收盤後
+  workflow_dispatch:   # 手動 / app 按鈕觸發
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 30   # 深度分析較久,給 30 分上限
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
