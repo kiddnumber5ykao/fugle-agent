@@ -292,7 +292,7 @@ def _trigger_github_workflow(workflow_file: str) -> dict:
 # ---------------------------------------------------------------------------
 with st.sidebar:
     st.subheader("🚀 一鍵分析")
-    if st.button("📈 整體技術分析", use_container_width=True,
+    if st.button("📈 技術分析", use_container_width=True,
                   help="在 GitHub Actions 背景跑(約 1-2 分鐘),你可以繼續聊天。"):
         res = _trigger_github_workflow("intraday_technical.yml")
         if res.get("ok"):
@@ -300,7 +300,7 @@ with st.sidebar:
         else:
             st.error(f"❌ {res.get('error')}")
 
-    if st.button("💎 整體深度分析", use_container_width=True,
+    if st.button("💎 深度分析", use_container_width=True,
                   help="在 GitHub Actions 背景跑(約 5-10 分鐘),你可以繼續聊天。"):
         res = _trigger_github_workflow("daily_deep_analysis.yml")
         if res.get("ok"):
@@ -311,18 +311,24 @@ with st.sidebar:
     if st.button("📋 重算部位+損益", use_container_width=True,
                   help="剛在股票交易加/改/刪交易後按這個 — 直接打 Apps Script 重算"
                        "股票部位、實際損益、5/10/15/20% 目標賣價公式,5-10 秒。"):
-        try:
-            from fugle_agent import sheets_writer as _sw
-            res = _sw.manual_sync()
-            if res.get("ok"):
-                st.success("✅ 部位+損益已重新整理完成")
-            else:
-                st.error(f"❌ {res.get('error')}")
-        except Exception as e:
-            st.error(f"❌ {type(e).__name__}: {e}")
+        with st.spinner("⏳ 正在計算中…(重算股票部位、實際損益、目標賣價公式)"):
+            try:
+                from fugle_agent import sheets_writer as _sw
+                res = _sw.manual_sync()
+            except Exception as e:
+                res = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        if res.get("ok"):
+            import datetime as _dt
+            _tw = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8)))
+            done_at = _tw.strftime("%Y-%m-%d %H:%M:%S")
+            st.session_state["_last_pos_sync"] = done_at
+            st.success(f"✅ 部位+損益重算完成 {done_at}")
+            st.toast("📋 部位+損益已更新", icon="✅")
+        else:
+            st.error(f"❌ {res.get('error')}")
 
-    if st.button("🔁 重整時間", use_container_width=True,
-                  help="重新讀 Sheet 上的最新時間戳"):
+    if st.button("🔁 重新整理頁面", use_container_width=True,
+                  help="重新讀 Sheet 上的最新時間戳跟資料(等於按 F5)"):
         st.rerun()
 
     st.divider()
@@ -346,6 +352,7 @@ with st.sidebar:
 # 主畫面置中時間戳 — 顯眼放在頂部
 # ---------------------------------------------------------------------------
 _tech_time, _deep_time = _latest_analysis_times()
+_pos_sync_time = st.session_state.get("_last_pos_sync")
 st.markdown(
     f"""
     <div style="text-align:center; padding: 12px 0 8px 0;
@@ -356,7 +363,8 @@ st.markdown(
         </div>
         <div style="font-size: 1.0em; line-height: 1.6;">
             📈 <b>技術分析</b>:{_tech_time or '尚未跑過'}<br>
-            💎 <b>深度分析</b>:{_deep_time or '尚未跑過'}
+            💎 <b>深度分析</b>:{_deep_time or '尚未跑過'}<br>
+            📋 <b>部位+損益</b>:{_pos_sync_time or '尚未跑過'}
         </div>
     </div>
     """,
