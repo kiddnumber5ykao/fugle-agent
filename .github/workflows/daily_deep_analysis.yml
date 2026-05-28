@@ -1,0 +1,32 @@
+name: 每日深度分析 (週一~五 收盤後 15:00)
+
+on:
+  schedule:
+    # TW 15:00 (收盤後 30 分鐘) = UTC 07:00,週一到週五
+    - cron: '0 7 * * 1-5'
+  workflow_dispatch:   # 手動觸發按鈕
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30   # 深度分析較久,給 30 分上限
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: 安裝套件
+        run: pip install -r requirements.txt
+
+      - name: 跑深度分析
+        env:
+          ANTHROPIC_API_KEY:        ${{ secrets.ANTHROPIC_API_KEY }}
+          FUGLE_MARKETDATA_API_KEY: ${{ secrets.FUGLE_MARKETDATA_API_KEY }}
+          SHEETS_WRITER_URL:        ${{ secrets.SHEETS_WRITER_URL }}
+          PORTFOLIO_SHEET_URL:      ${{ secrets.PORTFOLIO_SHEET_URL }}
+          ANTHROPIC_MODEL:          ${{ secrets.ANTHROPIC_MODEL }}
+          FUGLE_MOCK: "0"
+        run: python scripts/run_scheduled.py deep
