@@ -20,6 +20,13 @@ import datetime
 import json
 import os
 import sys
+from pathlib import Path
+
+# 把 repo 根目錄加進 sys.path,讓我們能 import fugle_agent
+# (因為 python scripts/xxx.py 預設只把 scripts/ 加進 path)
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 
 def _check_env() -> None:
