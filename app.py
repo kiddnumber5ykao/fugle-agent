@@ -534,6 +534,17 @@ with st.sidebar:
                         f"追蹤清單 {n_total} 筆 → 已有名稱 {n_already}、"
                         f"查不到 {n_lookup_fail}、寫入失敗 {n_upsert_fail}、"
                         f"補成功 {n_filled_wl}")
+                    # 印第 1 筆 row 的所有 keys + values(看 fetch_tab 到底讀到啥)
+                    if wl_rows:
+                        first = wl_rows[0]
+                        all_keys = list(first.keys())
+                        wl_diag.insert(1, f"📋 第 1 筆 row 的欄位名: {all_keys}")
+                        first_vals = {k: str(first.get(k, ""))[:30] for k in all_keys[:8]}
+                        wl_diag.insert(2, f"📋 第 1 筆 row 的內容前 8 欄: {first_vals}")
+                        # 計算「至少代號或 symbol 有值」的 row 數
+                        n_with_sym = sum(1 for r in wl_rows
+                                          if str(r.get("symbol") or r.get("代號") or "").strip())
+                        wl_diag.insert(3, f"📊 36 筆 row 中,代號欄位有值的:{n_with_sym}")
                 except Exception as e:
                     st.warning(f"⚠️ 補名字失敗(部位/損益還是有重算完):"
                                 f"{type(e).__name__}: {e}")
