@@ -523,6 +523,14 @@ with st.sidebar:
                   help="重新讀 Sheet 上的最新時間戳跟資料(等於按 F5)"):
         st.rerun()
 
+    if st.button("🧹 清除更新時間顯示", use_container_width=True,
+                  help="把上方 5 個更新時間全部清成「—」(只是隱藏顯示,不會動 Sheet 資料)。"
+                       "之後重跑各按鈕,時間才會重新出現,方便你確認哪個真的有跑。"):
+        import datetime as _dt
+        st.session_state["_time_cutoff"] = _dt.datetime.now(
+            _dt.timezone(_dt.timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
+        st.rerun()
+
     st.divider()
     if SETTINGS.mock:
         st.info("🎭 Mock 模式")
@@ -549,8 +557,16 @@ _pos_sync_time = (_last_workflow_run_time("resync_trades.yml")
                   or st.session_state.get("_last_pos_sync"))
 
 
+_time_cutoff = st.session_state.get("_time_cutoff")
+
+
 def _fmt(t):
-    return t or '—'
+    # 按過「清除更新時間顯示」後,比基準點舊的時間一律當作沒有(顯示 —)
+    if not t:
+        return '—'
+    if _time_cutoff and str(t) <= _time_cutoff:
+        return '—'
+    return t
 
 
 st.markdown(
