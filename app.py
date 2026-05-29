@@ -220,21 +220,65 @@ if "history" not in st.session_state:
 # ---------------------------------------------------------------------------
 # Helper:從追蹤清單抓最新「技術整理時間」+「基本面整理時間」
 # ---------------------------------------------------------------------------
-def _latest_analysis_times() -> tuple[str | None, str | None]:
+def _latest_analysis_times() -> dict:
+    """讀股票部位 + 追蹤清單分別的「技術整理時間」+「基本面整理時間」。
+    回傳 {pos_tech, pos_deep, wl_tech, wl_deep}。"""
+    out = {"pos_tech": None, "pos_deep": None, "wl_tech": None, "wl_deep": None}
     try:
         from fugle_agent import sheets as _sheets
-        tech_latest = None
-        deep_latest = None
+
+        def _max(cur, t):
+            t = str(t or "").strip()
+            if not t:
+                return cur
+            if cur is None or t > cur:
+                return t
+            return cur
+
+        # 股票部位:normalize_holding 會 strip 自訂欄位,改直接 fetch_tab
+        try:
+            tab = os.environ.get("PORTFOLIO_POSITIONS_TAB", _sheets.DEFAULT_POSITIONS_TAB)
+            for p in (_sheets.fetch_tab(tab) or []):
+                if p.get("_error"):
+                    continue
+                out["pos_tech"] = _max(out["pos_tech"], p.get("技術整理時間"))
+                out["pos_deep"] = _max(out["pos_deep"], p.get("基本面整理時間"))
+        except Exception:
+            pass
+
+        # 追蹤清單:本來就 raw row
         for w in (_sheets.load_watchlist() or []):
-            t = str(w.get("技術整理時間") or "").strip()
-            if t and (tech_latest is None or t > tech_latest):
-                tech_latest = t
-            d = str(w.get("基本面整理時間") or "").strip()
-            if d and (deep_latest is None or d > deep_latest):
-                deep_latest = d
-        return tech_latest, deep_latest
+            if w.get("_error"):
+                continue
+            out["wl_tech"] = _max(out["wl_tech"], w.get("技術整理時間"))
+            out["wl_deep"] = _max(out["wl_deep"], w.get("基本面整理時間"))
     except Exception:
-        return None, None
+        pass
+    return out
+
+
+# 每個按鈕狀態 — 儲存在 session_state
+def _mark_job_started(key: str, est_seconds: int) -> None:
+    import datetime as _dt
+    if "job_states" not in st.session_state:
+        st.session_state.job_states = {}
+    st.session_state.job_states[key] = {
+        "started":  _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8))),
+        "est_secs": est_seconds,
+    }
+
+
+def _job_indicator(key: str) -> str:
+    """根據 session_state 算出按鈕後綴指示:🔄 跑中 / ✅ 跑完(估計)。"""
+    import datetime as _dt
+    job = st.session_state.get("job_states", {}).get(key)
+    if not job:
+        return ""
+    now = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8)))
+    elapsed = (now - job["started"]).total_seconds()
+    if elapsed < job["est_secs"]:
+        return " 🔄"
+    return " ✅"
 
 
 # ---------------------------------------------------------------------------
@@ -299,38 +343,50 @@ with st.sidebar:
     st.caption("**📈 技術分析**(約 1-2 分鐘)")
     _tc1, _tc2 = st.columns(2)
     with _tc1:
-        if st.button("部位", key="btn_tech_pos", use_container_width=True):
+        _label = f"部位{_job_indicator('tech_pos')}"
+        if st.button(_label, key="btn_tech_pos", use_container_width=True):
             res = _trigger_github_workflow("intraday_technical.yml",
                                             inputs={"scope": "positions"})
             if res.get("ok"):
+                _mark_job_started("tech_pos", 180)
                 st.success("✅ 部位技術分析已觸發")
+                st.rerun()
             else:
                 st.error(f"❌ {res.get('error')}")
     with _tc2:
-        if st.button("追蹤清單", key="btn_tech_wl", use_container_width=True):
+        _label = f"追蹤清單{_job_indicator('tech_wl')}"
+        if st.button(_label, key="btn_tech_wl", use_container_width=True):
             res = _trigger_github_workflow("intraday_technical.yml",
                                             inputs={"scope": "watchlist"})
             if res.get("ok"):
+                _mark_job_started("tech_wl", 180)
                 st.success("✅ 追蹤清單技術分析已觸發")
+                st.rerun()
             else:
                 st.error(f"❌ {res.get('error')}")
 
     st.caption("**💎 深度分析**(約 5-10 分鐘)")
     _dc1, _dc2 = st.columns(2)
     with _dc1:
-        if st.button("部位 ", key="btn_deep_pos", use_container_width=True):
+        _label = f"部位{_job_indicator('deep_pos')}"
+        if st.button(_label, key="btn_deep_pos", use_container_width=True):
             res = _trigger_github_workflow("daily_deep_analysis.yml",
                                             inputs={"scope": "positions"})
             if res.get("ok"):
+                _mark_job_started("deep_pos", 600)
                 st.success("✅ 部位深度分析已觸發")
+                st.rerun()
             else:
                 st.error(f"❌ {res.get('error')}")
     with _dc2:
-        if st.button("追蹤清單 ", key="btn_deep_wl", use_container_width=True):
+        _label = f"追蹤清單{_job_indicator('deep_wl')}"
+        if st.button(_label, key="btn_deep_wl", use_container_width=True):
             res = _trigger_github_workflow("daily_deep_analysis.yml",
                                             inputs={"scope": "watchlist"})
             if res.get("ok"):
+                _mark_job_started("deep_wl", 600)
                 st.success("✅ 追蹤清單深度分析已觸發")
+                st.rerun()
             else:
                 st.error(f"❌ {res.get('error')}")
 
@@ -427,8 +483,14 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # 主畫面置中時間戳 — 顯眼放在頂部
 # ---------------------------------------------------------------------------
-_tech_time, _deep_time = _latest_analysis_times()
+_times = _latest_analysis_times()
 _pos_sync_time = st.session_state.get("_last_pos_sync")
+
+
+def _fmt(t):
+    return t or '—'
+
+
 st.markdown(
     f"""
     <div style="text-align:center; padding: 12px 0 8px 0;
@@ -437,10 +499,12 @@ st.markdown(
         <div style="font-size: 0.85em; color: rgba(127,127,127,0.9);">
             上次更新
         </div>
-        <div style="font-size: 1.0em; line-height: 1.6;">
-            📈 <b>技術分析</b>:{_tech_time or '尚未跑過'}<br>
-            💎 <b>深度分析</b>:{_deep_time or '尚未跑過'}<br>
-            📋 <b>部位+損益</b>:{_pos_sync_time or '尚未跑過'}
+        <div style="font-size: 0.95em; line-height: 1.7;">
+            📋 <b>重算部位+損益</b>:{_fmt(_pos_sync_time)}<br>
+            📈 <b>技術-部位</b>:{_fmt(_times['pos_tech'])}<br>
+            📈 <b>技術-追蹤</b>:{_fmt(_times['wl_tech'])}<br>
+            💎 <b>深度-部位</b>:{_fmt(_times['pos_deep'])}<br>
+            💎 <b>深度-追蹤</b>:{_fmt(_times['wl_deep'])}
         </div>
     </div>
     """,
