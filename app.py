@@ -343,6 +343,44 @@ def _cancel_all_running_workflows() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Helper:查某個 workflow 上次跑完的時間(給「重算」這種背景跑的用)
+# ---------------------------------------------------------------------------
+@st.cache_data(ttl=30, show_spinner=False)
+def _last_workflow_run_time(workflow_file: str) -> str | None:
+    """回傳該 workflow 最近一次「跑完」的台北時間字串,查不到回 None。"""
+    import json as _json
+    import urllib.request
+    import datetime as _dt
+
+    pat = (os.environ.get("GITHUB_PAT") or "").strip()
+    repo = (os.environ.get("GITHUB_REPO") or "kiddnumber5ykao/fugle-agent").strip()
+    if not pat:
+        return None
+    url = (f"https://api.github.com/repos/{repo}/actions/workflows/"
+           f"{workflow_file}/runs?per_page=1&status=completed")
+    headers = {
+        "Accept":               "application/vnd.github+json",
+        "Authorization":        f"Bearer {pat}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent":           "fugle-agent/0.1",
+    }
+    try:
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        runs = data.get("workflow_runs") or []
+        if not runs:
+            return None
+        # updated_at 是 UTC ISO(例如 2026-05-29T03:20:11Z),轉成台北時間
+        raw = str(runs[0].get("updated_at") or "").replace("Z", "+00:00")
+        utc_dt = _dt.datetime.fromisoformat(raw)
+        tw_dt = utc_dt.astimezone(_dt.timezone(_dt.timedelta(hours=8)))
+        return tw_dt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Helper:透過 GitHub Actions API 觸發背景 workflow
 # ---------------------------------------------------------------------------
 def _trigger_github_workflow(workflow_file: str,
@@ -506,7 +544,9 @@ with st.sidebar:
 # 主畫面置中時間戳 — 顯眼放在頂部
 # ---------------------------------------------------------------------------
 _times = _latest_analysis_times()
-_pos_sync_time = st.session_state.get("_last_pos_sync")
+# 重算是背景跑(GitHub Actions),結果傳不回 session_state,改去問 GitHub 上次跑完時間
+_pos_sync_time = (_last_workflow_run_time("resync_trades.yml")
+                  or st.session_state.get("_last_pos_sync"))
 
 
 def _fmt(t):
@@ -522,7 +562,7 @@ st.markdown(
             上次更新
         </div>
         <div style="font-size: 0.95em; line-height: 1.7;">
-            📋 <b>重算部位+損益</b>:{_fmt(_pos_sync_time)}<br>
+            📋 <b>重算交易+補名稱</b>:{_fmt(_pos_sync_time)}<br>
             📈 <b>技術-部位</b>:{_fmt(_times['pos_tech'])}<br>
             📈 <b>技術-追蹤</b>:{_fmt(_times['wl_tech'])}<br>
             💎 <b>深度-部位</b>:{_fmt(_times['pos_deep'])}<br>
