@@ -52,15 +52,22 @@ def main() -> None:
         print(f"❌ 不認識的範圍: {scope!r} (要 'all' / 'positions' / 'watchlist')")
         sys.exit(2)
 
+    # 第 3 個參數(選填):只跑這幾檔代號,逗號分隔,例如 "6902,2330"
+    symbols_raw = (sys.argv[3] if len(sys.argv) > 3 else "").strip()
+    symbols = [s.strip() for s in symbols_raw.split(",") if s.strip()]
+
     _check_env()
     os.environ.setdefault("FUGLE_MOCK", "0")
 
     from fugle_agent.tools import organize_all_technical, organize_all_deep
 
     t0 = datetime.datetime.now()
-    print(f"▶️  開始跑 {mode}/{scope} @ {t0.isoformat(timespec='seconds')}")
+    _sym_note = f" symbols={symbols}" if symbols else ""
+    print(f"▶️  開始跑 {mode}/{scope}{_sym_note} @ {t0.isoformat(timespec='seconds')}")
 
     args = {"scope": scope}
+    if symbols:
+        args["symbols"] = symbols
     handler = organize_all_technical.handler if mode == "technical" else organize_all_deep.handler
     result = asyncio.run(handler(args))
 
