@@ -3157,7 +3157,8 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
         sym = str(p.get("symbol", "")).strip()
         shares = int(p.get("shares") or 0)
         total_cost = float(p.get("total_cost") or 0)
-        name = str(p.get("name") or "").strip() or _lookup_stock_name(sym)
+        # 分析按鈕**不補名稱** — 名稱由「📋 重算交易+補名稱」按鈕專門處理
+        name = str(p.get("name") or "").strip()
         if shares <= 0 or total_cost <= 0:
             continue
         prev = existing_lights.get(sym, {})
@@ -3322,7 +3323,8 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
         sym = str(row.get("symbol") or row.get("代號") or "").strip()
         if not sym:
             continue
-        name = str(row.get("name") or row.get("名稱") or "").strip() or _lookup_stock_name(sym)
+        # 分析按鈕**不補名稱** — 名稱由「📋 重算交易+補名稱」按鈕專門處理
+        name = str(row.get("name") or row.get("名稱") or "").strip()
         prev = existing_lights.get(sym, {})
 
         # === 技術部分 ===
