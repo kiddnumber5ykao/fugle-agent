@@ -451,10 +451,11 @@ with st.sidebar:
             else:
                 st.error(f"❌ {res.get('error')}")
 
-    _resync_label = f"📋 重算部位+損益{_job_indicator('pos_resync')}"
+    _resync_label = f"📋 重算交易+補名稱{_job_indicator('pos_resync')}"
     if st.button(_resync_label, use_container_width=True,
-                  help="剛在股票交易加/改/刪交易後按這個 — 重算股票部位、實際損益、"
-                       "5/10/15/20% 目標賣價公式,並自動補空白的股票名稱。30-60 秒。"):
+                  help="剛在股票交易加/改/刪交易後按這個 — 從交易表重算股票部位、實際損益、"
+                       "5/10/15/20% 目標賣價公式,並**幫股票部位 + 追蹤清單**補上空白的股票名稱。"
+                       "(其他 4 個分析按鈕不會補名稱,專心填技術 / 基本面欄位) 30-60 秒。"):
         _mark_job_started("pos_resync", 90)
         from fugle_agent import sheets_writer as _sw
         from fugle_agent import sheets as _sh
