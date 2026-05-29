@@ -2445,8 +2445,20 @@ def _compute_short_signals(sym: str) -> dict:
         except Exception:
             pass
 
-        # 1) 今天表現
-        prev_close = closes[-2] if len(closes) >= 2 else current
+        # 1) 今天表現 — 用「日期」找「最近一個非今日」的收盤,避免拿到錯資料
+        # 例如:Fugle 今天還沒收盤,closes[-1] 可能是昨日(已收盤)、closes[-2] 才是前天。
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        prev_close = None
+        prev_vol = None
+        for bar in reversed(bars):
+            bar_date = str(bar.get("date", "")).strip()[:10]
+            if bar_date and bar_date < today_str:
+                prev_close = bar.get("close")
+                prev_vol = bar.get("volume")
+                break
+        # 找不到就退回最舊的 fallback
+        if prev_close is None:
+            prev_close = closes[-2] if len(closes) >= 2 else current
         today_change_pct = (current / prev_close - 1) * 100 if prev_close else 0
         today_vol = volumes[-1] if volumes else 0
         avg_vol_20 = (sum(volumes[-20:]) / min(len(volumes), 20)) if volumes else 0
