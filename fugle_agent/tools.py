@@ -2420,13 +2420,32 @@ async def organize_all(args: dict) -> dict:
 
 def _compute_short_signals(sym: str) -> dict:
     """短線版的訊號計算 — 對單一代號抓 K 線 + 量,
-    產出 6 段白話描述 + 內部數值給 2 個技術燈號計算用。"""
+    產出 6 段白話描述 + 內部數值給 2 個技術燈號計算用。
+    內建 429 重試:遇到 Fugle rate limit 自動等 20 秒再試一次。"""
     try:
         to_dt = datetime.now()
         from_dt = to_dt - timedelta(days=400)
-        data = _client.candles(sym,
-                                from_date=from_dt.strftime("%Y-%m-%d"),
-                                to_date=to_dt.strftime("%Y-%m-%d"))
+        # 🛡️ 自帶 429 重試 — Fugle 流量管制下會 burst 失敗,等 20 秒讓配額重置
+        data = None
+        for attempt in range(3):
+            try:
+                data = _client.candles(sym,
+                                        from_date=from_dt.strftime("%Y-%m-%d"),
+                                        to_date=to_dt.strftime("%Y-%m-%d"))
+                break
+            except Exception as e:
+                err_s = str(e)
+                if ("429" in err_s or "rate limit" in err_s.lower()) and attempt < 2:
+                    print(f"⏳ {sym} Fugle 429,等 {20 * (attempt + 1)} 秒重試",
+                          flush=True)
+                    time.sleep(20 * (attempt + 1))   # 20s, 40s 漸進
+                    continue
+                # 其他錯誤直接放棄
+                return {"ok": False, "mode": _client.mode,
+                        "error": f"{type(e).__name__}: {e}"}
+        if data is None:
+            return {"ok": False, "mode": _client.mode,
+                    "error": "Fugle 重試 3 次後仍失敗"}
         bars = data.get("data", [])
         if len(bars) < 7:
             return {"ok": False, "mode": _client.mode,
@@ -2854,7 +2873,7 @@ def _safe_int(v) -> int:
         return 0
 
 
-_COMPUTE_PARALLEL_WORKERS = 6   # 技術分析 Fugle K 線抓取並行數
+_COMPUTE_PARALLEL_WORKERS = 3   # 技術分析 Fugle K 線抓取並行數 (改低點避免 Fugle 429)
 
 
 def _prefetch_signals_parallel(syms: list[str]) -> dict[str, dict]:
