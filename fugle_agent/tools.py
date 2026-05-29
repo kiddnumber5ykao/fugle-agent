@@ -2434,33 +2434,54 @@ def _compute_short_signals(sym: str) -> dict:
         closes = [b["close"] for b in bars]
         volumes = [b.get("volume", 0) for b in bars]
 
+        # 🛡️ 抓現價 — 優先用「今日」價格,避免拿到「昨日收盤」這種干擾欄位
+        # Fugle quote 的欄位語意:
+        #   - lastPrice / closePrice / price = 今天的價(盤中或收盤)
+        #   - referencePrice / previousClose = **昨日**收盤(❌ 不能當今天用!)
+        # 之前 bug 就是 fallback 順序錯,有些股票拿到 referencePrice 就以為是今天。
         current = closes[-1]
+        current_source = "candles[-1]"
         try:
             q = _client.quote(sym)
-            for k in ("lastPrice", "closePrice", "price", "referencePrice", "previousClose"):
+            for k in ("lastPrice", "closePrice", "price"):
                 v = q.get(k) if isinstance(q, dict) else None
                 if v:
-                    current = float(v)
-                    break
+                    try:
+                        current = float(v)
+                        current_source = f"quote.{k}"
+                        break
+                    except (ValueError, TypeError):
+                        pass
         except Exception:
             pass
 
-        # 1) 今天表現 — 用「日期」找「最近一個非今日」的收盤,避免拿到錯資料
-        # 例如:Fugle 今天還沒收盤,closes[-1] 可能是昨日(已收盤)、closes[-2] 才是前天。
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        # 1) 今天表現 — 用「日期」找「最近一個非今日」的收盤
+        # 用台北時間(UTC+8),不要用 GitHub Actions runner 的 UTC,
+        # 不然清晨/午夜跑時 today_str 會跨日、fallback 邏輯出錯。
+        _tw_now = datetime.now(timezone(timedelta(hours=8)))
+        today_str = _tw_now.strftime("%Y-%m-%d")
         prev_close = None
         prev_vol = None
+        prev_date = ""
         for bar in reversed(bars):
             bar_date = str(bar.get("date", "")).strip()[:10]
             if bar_date and bar_date < today_str:
                 prev_close = bar.get("close")
                 prev_vol = bar.get("volume")
+                prev_date = bar_date
                 break
-        # 找不到就退回最舊的 fallback
         if prev_close is None:
             prev_close = closes[-2] if len(closes) >= 2 else current
+            prev_date = "(找不到非今日 bar)"
         today_change_pct = (current / prev_close - 1) * 100 if prev_close else 0
         today_vol = volumes[-1] if volumes else 0
+
+        # Debug log(GitHub Actions log 看得到)— 之後怪 case 可以追
+        if abs(today_change_pct) > 0.01:
+            print(f"   📊 {sym} today={today_change_pct:+.2f}% | "
+                  f"current={current} ({current_source}) | "
+                  f"prev={prev_close} ({prev_date}) | TW today={today_str}",
+                  flush=True)
         avg_vol_20 = (sum(volumes[-20:]) / min(len(volumes), 20)) if volumes else 0
         vol_ratio_today = (today_vol / avg_vol_20) if avg_vol_20 else 1.0
         if vol_ratio_today >= 1.8:
