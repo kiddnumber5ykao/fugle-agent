@@ -3445,8 +3445,25 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
     "給 2 個技術燈號(短線 5-10 天 + 超短線 2-5 天)、寫綜合建議(技術版),全部寫回 Sheet。"
     "**使用者說「整體技術分析」「整理技術」「跑技術面」直接呼叫這個**(快,12 檔約 30-60 秒)。"
     "回覆**只**說「技術面整理好了」+ 簡短列看好/看衰的代號,不要長篇大論,不要 render 完整表格,"
-    "完整資料使用者自己看 Sheet。",
-    {"type": "object", "properties": {}, "required": []},
+    "完整資料使用者自己看 Sheet。"
+    "**單檔重跑**:若使用者說「某檔失敗 / 沒抓到 / 幫我重跑 2330」,用 symbols=['2330'] 只跑那幾檔,"
+    "省錢省時間,不要重跑全部。",
+    {
+        "type": "object",
+        "properties": {
+            "scope": {
+                "type": "string",
+                "enum": ["all", "positions", "watchlist"],
+                "description": "範圍:all=全部(預設)、positions=只股票部位、watchlist=只追蹤清單",
+            },
+            "symbols": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "只跑這幾檔代號(失敗單檔重跑用,例如 ['2330','2454'])。給了就只跑這些,其他不動。",
+            },
+        },
+        "required": [],
+    },
 )
 async def organize_all_technical(args: dict) -> dict:
     """可選參數:
@@ -3461,10 +3478,9 @@ async def organize_all_technical(args: dict) -> dict:
     do_wl  = scope in ("all", "watchlist")
     symbols_filter = set(str(s).strip() for s in (args or {}).get("symbols", []) if s)
 
-    # 只在跑「部位」時做 manual_sync(那個跟交易紀錄綁,跟追蹤清單無關)
+    # 不再自動 manual_sync — 重建部位/損益/補名稱交給「📋 重算交易+補名稱」按鈕專責,
+    # 避免每次分析都把實際損益的名稱清掉重補(多餘且會打架)
     sync_res = None
-    if do_pos:
-        sync_res = sheets_writer.manual_sync()
 
     # 並行抓需要的 sym 的 K 線
     all_syms: set[str] = set()
@@ -3513,8 +3529,25 @@ async def organize_all_technical(args: dict) -> dict:
     "配息、營收動能、法人籌碼、近期新聞,給 2 個基本面燈號(籌碼面 + 公司面)、寫完整綜合建議。"
     "**使用者說「整體深度分析」「深度分析」「跑全部」直接呼叫這個**。"
     "**告訴使用者**這會跑很久(每檔 1-2 分鐘,12 檔可能 15-25 分鐘),建議週末或晚上跑。"
-    "回覆**只**說「深度分析整理好了」+ 簡短列看好/看衰的代號,不要長篇大論。",
-    {"type": "object", "properties": {}, "required": []},
+    "回覆**只**說「深度分析整理好了」+ 簡短列看好/看衰的代號,不要長篇大論。"
+    "**單檔重跑**:若使用者說「某檔失敗 / 沒抓到 / 幫我重跑 2330 的深度」,用 symbols=['2330'] 只跑那幾檔,"
+    "深度分析很貴,千萬不要為了一兩檔失敗就重跑全部。",
+    {
+        "type": "object",
+        "properties": {
+            "scope": {
+                "type": "string",
+                "enum": ["all", "positions", "watchlist"],
+                "description": "範圍:all=全部(預設)、positions=只股票部位、watchlist=只追蹤清單",
+            },
+            "symbols": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "只跑這幾檔代號(失敗單檔重跑用,例如 ['2330','2454'])。給了就只跑這些,其他不動。",
+            },
+        },
+        "required": [],
+    },
 )
 async def organize_all_deep(args: dict) -> dict:
     """可選參數:
@@ -3529,10 +3562,9 @@ async def organize_all_deep(args: dict) -> dict:
     do_wl  = scope in ("all", "watchlist")
     symbols_filter = set(str(s).strip() for s in (args or {}).get("symbols", []) if s)
 
-    # manual_sync 只跟部位有關 — 而且單檔重跑時不需要(只重跑特定 sym)
+    # 不再自動 manual_sync — 重建部位/損益/補名稱交給「📋 重算交易+補名稱」按鈕專責,
+    # 避免每次分析都把實際損益的名稱清掉重補(多餘且會打架)
     sync_res = None
-    if do_pos and not symbols_filter:
-        sync_res = sheets_writer.manual_sync()
 
     # 收集要 prefetch 基本面的 (sym, name) — 限定 scope + symbols_filter
     _fundamentals_session_cache.clear()
