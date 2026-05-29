@@ -61,23 +61,54 @@ def main() -> None:
     print(f"▶️  開始跑 {mode}/{scope} @ {t0.isoformat(timespec='seconds')}")
 
     args = {"scope": scope}
-    if mode == "technical":
-        result = asyncio.run(organize_all_technical.handler(args))
-    else:
-        result = asyncio.run(organize_all_deep.handler(args))
+    handler = organize_all_technical.handler if mode == "technical" else organize_all_deep.handler
+    result = asyncio.run(handler(args))
 
     dt = (datetime.datetime.now() - t0).total_seconds()
     print(f"✅ {mode} 跑完 @ +{dt:.1f}s")
 
-    # 印出簡要結果(便於從 Actions log 追)
+    # 解析結果 + 自動重跑失敗的股票(只重試 1 次,避免無窮迴圈)
+    failed_syms: list[str] = []
     try:
         text = result["content"][0]["text"]
         data = json.loads(text)
-        n_pos = data.get("positions", {}).get("n", "?")
-        n_wl = data.get("watchlist", {}).get("n", "?")
+        pos = data.get("positions") or {}
+        wl  = data.get("watchlist") or {}
+        n_pos = pos.get("n", "?")
+        n_wl  = wl.get("n", "?")
         print(f"   股票部位: {n_pos} 檔 / 追蹤清單: {n_wl} 檔")
+        for r in (pos.get("items") or []):
+            if r.get("error"):
+                failed_syms.append(r["symbol"])
+        for r in (wl.get("items") or []):
+            if r.get("error"):
+                if r["symbol"] not in failed_syms:
+                    failed_syms.append(r["symbol"])
     except Exception as e:
         print(f"   (無法解析結果摘要: {e})")
+
+    if failed_syms:
+        print(f"♻️ 自動重跑 {len(failed_syms)} 檔失敗的: {failed_syms}")
+        t1 = datetime.datetime.now()
+        retry_result = asyncio.run(handler({**args, "symbols": failed_syms}))
+        dt2 = (datetime.datetime.now() - t1).total_seconds()
+        print(f"   重跑跑完 @ +{dt2:.1f}s")
+        # 印重跑後還剩幾檔失敗
+        try:
+            rdata = json.loads(retry_result["content"][0]["text"])
+            still_failed: list[str] = []
+            for r in ((rdata.get("positions") or {}).get("items") or []):
+                if r.get("error"):
+                    still_failed.append(r["symbol"])
+            for r in ((rdata.get("watchlist") or {}).get("items") or []):
+                if r.get("error") and r["symbol"] not in still_failed:
+                    still_failed.append(r["symbol"])
+            if still_failed:
+                print(f"⚠️ 重跑後仍失敗: {still_failed}")
+            else:
+                print(f"✅ 重跑全部成功!")
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
