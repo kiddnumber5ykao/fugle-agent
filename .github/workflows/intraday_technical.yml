@@ -16,6 +16,11 @@ on:
           - all
           - positions
           - watchlist
+      symbols:
+        description: '只跑這幾檔(逗號分隔,例如 6902,2330)留空=全跑'
+        type: string
+        required: false
+        default: ''
 
 jobs:
   run:
@@ -39,4 +44,4 @@ jobs:
           SHEETS_WRITER_URL:        ${{ secrets.SHEETS_WRITER_URL }}
           PORTFOLIO_SHEET_URL:      ${{ secrets.PORTFOLIO_SHEET_URL }}
           FUGLE_MOCK: "0"
-        run: python scripts/run_scheduled.py technical ${{ inputs.scope || 'all' }}
+        run: python scripts/run_scheduled.py technical ${{ inputs.scope || 'all' }} "${{ inputs.symbols }}"
