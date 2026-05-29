@@ -49,9 +49,13 @@ def _extract_sheet_id(url: str) -> str | None:
 
 
 def _csv_url(sheet_id: str, tab_name: str) -> str:
+    # 加一個會變動的 _cb 參數打掉 Google gviz 的快取(否則剛寫進去的資料,
+    # 幾分鐘內讀回來還是舊的 — 會害「綜合建議」合併不到剛寫的另一邊燈號)。
+    import time as _time
+    cb = int(_time.time())
     return (
         f"https://docs.google.com/spreadsheets/d/{sheet_id}/"
-        f"gviz/tq?tqx=out:csv&sheet={urllib.parse.quote(tab_name)}"
+        f"gviz/tq?tqx=out:csv&sheet={urllib.parse.quote(tab_name)}&_cb={cb}"
     )
 
 
@@ -76,7 +80,9 @@ def fetch_tab(tab_name: str, *, sheet_url: str | None = None,
     url = _csv_url(sheet_id, tab_name)
     try:
         req = urllib.request.Request(
-            url, headers={"User-Agent": "fugle-agent/0.1"})
+            url, headers={"User-Agent": "fugle-agent/0.1",
+                          "Cache-Control": "no-cache, no-store, max-age=0",
+                          "Pragma": "no-cache"})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read().decode("utf-8")
     except Exception as exc:  # noqa: BLE001
