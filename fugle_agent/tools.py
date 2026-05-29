@@ -121,15 +121,20 @@ _NAME_CACHE: dict[str, str] = {}  # 同 session 同個 symbol 只查一次
 
 
 def _lookup_stock_name(symbol: str) -> str:
-    """查股票名稱,三層 fallback:內建熱門表 → Fugle tickers → Fugle quote。
+    """查股票名稱,多層 fallback:內建熱門表 → Fugle tickers → Fugle quote(重試) → yfinance。
+    重要:查不到就**不寫快取**,這樣同一檔之後還會再重試(避免一次失敗就永遠空白)。
     免費方案的 Fugle 雖然 tickers 拿不到,但 quote 一定會帶名字。"""
+    import time as _time
+
     if not symbol:
         return ""
-    if symbol in _NAME_CACHE:
+    # 只有「查到過名字」才用快取;空值不快取,留給下次重試
+    if _NAME_CACHE.get(symbol):
         return _NAME_CACHE[symbol]
 
-    # 1) 內建熱門表 + Fugle tickers(symbol_lookup.search)
     name = ""
+
+    # 1) 內建熱門表 + Fugle tickers(symbol_lookup.search)
     try:
         hits = symbol_lookup.search(symbol, fugle_client=_client, limit=5)
         for h in hits:
@@ -141,20 +146,43 @@ def _lookup_stock_name(symbol: str) -> str:
     except Exception:
         pass
 
-    # 2) Fugle quote 通常會帶 name 欄位 — 這個免費方案也能用
+    # 2) Fugle quote 通常會帶 name 欄位 — 撞到 429 / 暫時失敗就重試最多 3 次
+    if not name:
+        for attempt in range(3):
+            try:
+                q = _client.quote(symbol)
+                if isinstance(q, dict):
+                    for key in ("name", "nameZhTw", "Name", "shortName"):
+                        v = q.get(key)
+                        if v:
+                            name = str(v).strip()
+                            break
+                if name:
+                    break
+            except Exception:
+                pass
+            if attempt < 2:
+                _time.sleep(2 * (attempt + 1))   # 2s, 4s 退避
+
+    # 3) yfinance 最後備援(.TW / .TWO)— 連 Fugle 都查不到的冷門股
     if not name:
         try:
-            q = _client.quote(symbol)
-            if isinstance(q, dict):
-                for key in ("name", "nameZhTw", "Name", "shortName"):
-                    v = q.get(key)
+            import yfinance as _yf
+            for suffix in (".TW", ".TWO"):
+                try:
+                    info = _yf.Ticker(f"{symbol}{suffix}").info or {}
+                    v = info.get("longName") or info.get("shortName")
                     if v:
                         name = str(v).strip()
                         break
+                except Exception:
+                    continue
         except Exception:
             pass
 
-    _NAME_CACHE[symbol] = name
+    # 只在「真的查到」時才寫快取
+    if name:
+        _NAME_CACHE[symbol] = name
     return name
 
 

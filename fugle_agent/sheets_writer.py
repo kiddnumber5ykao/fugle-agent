@@ -115,6 +115,13 @@ def delete_watchlist_item(symbol: str) -> dict:
     return _post("delete_watchlist_item", {"symbol": symbol})
 
 
+def backfill_realized_names(names: dict[str, str], timeout: int = 60) -> dict:
+    """直接把名稱寫進「實際損益」分頁名稱空白的 row(以 symbol 比對)。
+    names = {代號: 名稱}。只填空白的,不覆蓋已有名稱。
+    這條路不依賴股票部位 / 追蹤清單 — 名字現查現填,獨立補實際損益。"""
+    return _post("backfill_realized_names", {"names": names}, timeout=timeout)
+
+
 def manual_sync(timeout: int = 90) -> dict:
     """觸發 Apps Script 跑一次完整同步:
     重建股票部位 + 寫 realized_pnl 到股票交易 + 同步「實際損益」分頁 + 寫目標賣價公式。
