@@ -268,17 +268,69 @@ def _mark_job_started(key: str, est_seconds: int) -> None:
     }
 
 
+# 每個按鈕對應的 GitHub workflow 檔名 — 用來查「到底跑完沒」
+_KEY_TO_WORKFLOW = {
+    "tech_pos":   "intraday_technical.yml",
+    "tech_wl":    "intraday_technical.yml",
+    "deep_pos":   "daily_deep_analysis.yml",
+    "deep_wl":    "daily_deep_analysis.yml",
+    "new_wl":     "daily_deep_analysis.yml",   # 新追蹤跑技術+深度,以較慢的深度為準
+    "pos_resync": "resync_trades.yml",
+}
+
+
+@st.cache_data(ttl=15, show_spinner=False)
+def _workflow_running_count(workflow_file: str) -> int:
+    """查某個 workflow 目前還在 in_progress / queued 的 run 數量。查不到回 -1。"""
+    import json as _json
+    import urllib.request
+
+    pat = (os.environ.get("GITHUB_PAT") or "").strip()
+    repo = (os.environ.get("GITHUB_REPO") or "kiddnumber5ykao/fugle-agent").strip()
+    if not pat:
+        return -1
+    headers = {
+        "Accept":               "application/vnd.github+json",
+        "Authorization":        f"Bearer {pat}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent":           "fugle-agent/0.1",
+    }
+    total = 0
+    try:
+        for status in ("in_progress", "queued"):
+            url = (f"https://api.github.com/repos/{repo}/actions/workflows/"
+                   f"{workflow_file}/runs?status={status}&per_page=10")
+            req = urllib.request.Request(url, headers=headers, method="GET")
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+            total += len(data.get("workflow_runs") or [])
+        return total
+    except Exception:
+        return -1
+
+
 def _job_indicator(key: str) -> str:
-    """根據 session_state 算出按鈕後綴指示:🔄 跑中 / ✅ 跑完(估計)。"""
+    """按鈕後綴指示:🔄 真的還在 GitHub 跑 / ✅ 真的跑完了。
+    去問 GitHub workflow 還在不在跑,不再用估計時間瞎猜。"""
     import datetime as _dt
     job = st.session_state.get("job_states", {}).get(key)
     if not job:
         return ""
     now = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8)))
     elapsed = (now - job["started"]).total_seconds()
-    if elapsed < job["est_secs"]:
+
+    wf = _KEY_TO_WORKFLOW.get(key)
+    running = _workflow_running_count(wf) if wf else -1
+
+    # 剛按下去的前 25 秒給「起跑緩衝」— GitHub 可能還沒把 run 排進 queued
+    if elapsed < 25:
         return " 🔄"
-    return " ✅"
+    if running > 0:
+        return " 🔄"          # GitHub 確認還在跑
+    if running == 0:
+        return " ✅"          # GitHub 確認沒有跑中的 → 真的完成
+    # running == -1:查不到(沒設 PAT / API 出錯)→ 退回估計時間
+    return " 🔄" if elapsed < job["est_secs"] else " ✅"
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +487,25 @@ def _trigger_github_workflow(workflow_file: str,
 
 
 # ---------------------------------------------------------------------------
+# Helper:找出追蹤清單裡「還沒分析過」的代號(技術整理時間空白 = 新加的)
+# ---------------------------------------------------------------------------
+def _new_watchlist_symbols() -> list[str]:
+    out: list[str] = []
+    try:
+        from fugle_agent import sheets as _sheets
+        for w in (_sheets.load_watchlist() or []):
+            if w.get("_error"):
+                continue
+            sym = str(w.get("symbol") or w.get("代號") or "").strip()
+            tech_t = str(w.get("技術整理時間") or "").strip()
+            if sym and not tech_t and sym not in out:
+                out.append(sym)
+    except Exception:
+        pass
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Sidebar — 分析按鈕 + 狀態列 + 對話控制
 # ---------------------------------------------------------------------------
 with st.sidebar:
@@ -489,6 +560,26 @@ with st.sidebar:
             else:
                 st.error(f"❌ {res.get('error')}")
 
+    _new_label = f"🆕 只跑新追蹤(技術+深度){_job_indicator('new_wl')}"
+    if st.button(_new_label, use_container_width=True,
+                  help="自動找出追蹤清單裡「技術整理時間」還空白的代號(= 你剛加、還沒分析過的),"
+                       "只對那幾檔跑技術 + 深度分析,不重跑整張清單,省時間省錢。"):
+        _new_syms = _new_watchlist_symbols()
+        if not _new_syms:
+            st.info("沒有新的追蹤清單(都分析過了)")
+        else:
+            _syms_str = ",".join(_new_syms)
+            r1 = _trigger_github_workflow("intraday_technical.yml",
+                                           inputs={"scope": "watchlist", "symbols": _syms_str})
+            r2 = _trigger_github_workflow("daily_deep_analysis.yml",
+                                           inputs={"scope": "watchlist", "symbols": _syms_str})
+            if r1.get("ok") and r2.get("ok"):
+                _mark_job_started("new_wl", 600)
+                st.success(f"✅ 已觸發 {len(_new_syms)} 檔新追蹤的技術+深度分析")
+                st.rerun()
+            else:
+                st.error(f"❌ 技術:{r1.get('error', 'ok')} / 深度:{r2.get('error', 'ok')}")
+
     _resync_label = f"📋 重算交易+補名稱{_job_indicator('pos_resync')}"
     if st.button(_resync_label, use_container_width=True,
                   help="剛在股票交易加/改/刪交易後按這個 — 從交易表重算股票部位、實際損益、"
@@ -530,6 +621,19 @@ with st.sidebar:
         st.session_state["_time_cutoff"] = _dt.datetime.now(
             _dt.timezone(_dt.timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
         st.rerun()
+
+    st.divider()
+    st.checkbox(
+        "✏️ 允許 AI 修改 Google Sheet",
+        key="_allow_write",
+        value=st.session_state.get("_allow_write", False),
+        help="預設關閉 = 對話只能讀 Sheet 回答你,絕對不會增刪改任何資料。\n\n"
+             "要請 AI 幫你更新 Sheet(例如丟新聞 / 股價截圖叫它記錄、加交易、加追蹤)時,"
+             "才打開這個開關,然後在對話裡講。用完建議關回去比較安全。")
+    if st.session_state.get("_allow_write"):
+        st.warning("✏️ 修改模式開著 — 對話現在**可以動到你的 Sheet**")
+    else:
+        st.caption("🔒 唯讀模式:對話只會讀資料、不會改動 Sheet")
 
     st.divider()
     if SETTINGS.mock:
@@ -639,14 +743,15 @@ else:
 prompt = prompt_text if (prompt_text or prompt_files) else None
 
 
-def _consume_turn(prompt: str, text_box, tool_log):
+def _consume_turn(prompt: str, text_box, tool_log, read_only: bool = True):
     """Drive the async generator from sync code so Streamlit can update
     placeholders mid-stream."""
     text_buffer = [""]
     tools_seen: list[dict] = []
 
     async def go():
-        async for event in run_turn_streaming(prompt, st.session_state.history):
+        async for event in run_turn_streaming(prompt, st.session_state.history,
+                                              read_only=read_only):
             kind = event["type"]
             if kind == "text":
                 text_buffer[0] += event["text"]
@@ -738,7 +843,9 @@ if prompt is not None or prompt_files:
         tool_log = st.container()        # tool calls go here, above the text
         text_box = st.empty()            # streaming text replacement target
         try:
-            full_text, tools_used = _consume_turn(agent_input, text_box, tool_log)
+            _allow_write = bool(st.session_state.get("_allow_write", False))
+            full_text, tools_used = _consume_turn(
+                agent_input, text_box, tool_log, read_only=not _allow_write)
             text_box.markdown(full_text)
         except Exception as exc:
             # 把常見的暫時性錯誤翻成中文,避免使用者看到 traceback 嚇到
