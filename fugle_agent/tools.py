@@ -2456,54 +2456,98 @@ def _compute_short_signals(sym: str) -> dict:
         closes = [b["close"] for b in bars]
         volumes = [b.get("volume", 0) for b in bars]
 
-        # 🛡️ 抓現價 — 優先用「今日」價格,避免拿到「昨日收盤」這種干擾欄位
-        # Fugle quote 的欄位語意:
-        #   - lastPrice / closePrice / price = 今天的價(盤中或收盤)
-        #   - referencePrice / previousClose = **昨日**收盤(❌ 不能當今天用!)
-        # 之前 bug 就是 fallback 順序錯,有些股票拿到 referencePrice 就以為是今天。
-        current = closes[-1]
-        current_source = "candles[-1]"
+        # 🌟 抓「最新價格」+「昨日收盤」做比較
+        # 策略(從最新到最舊):
+        #   1) Fugle quote.lastPrice  — 盤中即時(最新!)
+        #   2) yfinance regularMarketPrice — Fugle 沒抓到時的備援(延遲 15-20 分)
+        #   3) candles[-1] close — 都失敗就用最後一根 K 線
+
+        _tw_now = datetime.now(timezone(timedelta(hours=8)))
+        today_str = _tw_now.strftime("%Y-%m-%d")
+
+        # 找「昨日」收盤:最後一根日期 < 今天的 bar
+        prev_close = None
+        prev_date = ""
+        for bar in reversed(bars):
+            bd = str(bar.get("date", "")).strip()[:10]
+            if bd and bd < today_str:
+                prev_close = bar.get("close")
+                prev_date = bd
+                break
+        # 如果今天 bar 不存在,closes[-1] 本身就是昨日 → 用 closes[-2] 當前天
+        if prev_close is None:
+            prev_close = closes[-2] if len(closes) >= 2 else closes[-1]
+            prev_date = (str(bars[-2].get("date", ""))[:10]
+                         if len(bars) >= 2 else "(無)")
+
+        # ① 抓 Fugle quote 即時價
+        current = None
+        current_source = ""
+        current_date_assumed = ""
         try:
             q = _client.quote(sym)
-            for k in ("lastPrice", "closePrice", "price"):
-                v = q.get(k) if isinstance(q, dict) else None
-                if v:
-                    try:
-                        current = float(v)
-                        current_source = f"quote.{k}"
-                        break
-                    except (ValueError, TypeError):
-                        pass
+            if isinstance(q, dict):
+                for k in ("lastPrice", "closePrice", "price"):
+                    v = q.get(k)
+                    if v:
+                        try:
+                            current = float(v)
+                            current_source = f"fugle_quote.{k}"
+                            # quote 給的價跟昨日不同 → 是今天的盤中/收盤
+                            if abs(current - prev_close) > 0.001:
+                                current_date_assumed = today_str
+                            else:
+                                # 一模一樣 → 可能 Fugle 還沒更新今天 → 標昨日
+                                current_date_assumed = prev_date
+                            break
+                        except (ValueError, TypeError):
+                            pass
         except Exception:
             pass
 
-        # 1) 最新表現 — 用 Fugle K 線最新 2 根 close 比較,可靠
-        # 例:今天剛開盤前 → 顯示「5/28 漲 +1.5%」(昨日 vs 前天)
-        #     盤中 → 顯示「今天 漲 +0.8%」(今日 vs 昨日)
-        #     收盤後 → 顯示「今天 跌 -0.5%」
-        # 不再說「平盤」— 用 ±0.05% 當「沒漲沒跌」的真實平盤判斷。
-        _tw_now = datetime.now(timezone(timedelta(hours=8)))
-        today_str = _tw_now.strftime("%Y-%m-%d")
-        if len(closes) >= 2:
-            latest_close = closes[-1]
-            prev_close = closes[-2]
-            latest_date = str(bars[-1].get("date", "")).strip()[:10]
-            prev_date = str(bars[-2].get("date", "")).strip()[:10]
-        else:
-            latest_close = closes[-1] if closes else current
-            prev_close = current
-            latest_date = ""
-            prev_date = ""
-        today_change_pct = ((latest_close / prev_close - 1) * 100
-                            if prev_close else 0)
+        # ② 如果 Fugle 沒給今天的價(current 還是 None 或等於昨日),用 yfinance 試
+        if current is None or (current == prev_close and current_date_assumed != today_str):
+            try:
+                import yfinance as _yf
+                # 台股加 .TW(主板)或 .TWO(櫃買)後綴
+                for suffix in (".TW", ".TWO"):
+                    try:
+                        tk = _yf.Ticker(f"{sym}{suffix}")
+                        info = tk.fast_info if hasattr(tk, "fast_info") else {}
+                        yf_price = info.get("last_price") or info.get("lastPrice")
+                        if yf_price is None:
+                            # fallback to history
+                            hist = tk.history(period="1d", interval="1m")
+                            if not hist.empty:
+                                yf_price = float(hist["Close"].iloc[-1])
+                        if yf_price and float(yf_price) > 0:
+                            current = float(yf_price)
+                            current_source = f"yfinance{suffix}"
+                            current_date_assumed = today_str
+                            break
+                    except Exception:
+                        continue
+            except ImportError:
+                pass
+
+        # ③ 兩個都失敗就用最後一根 K 線
+        if current is None:
+            current = closes[-1]
+            current_source = "candles[-1]"
+            current_date_assumed = str(bars[-1].get("date", "")).strip()[:10]
+
+        # 計算今日表現:current (今日) vs prev_close (昨日)
+        today_change_pct = ((current / prev_close - 1) * 100 if prev_close else 0)
+        latest_date = current_date_assumed
         today_vol = volumes[-1] if volumes else 0
 
-        # Debug log(GitHub Actions log 看得到)— 完整 trace 方便追問題
+        # Debug log
         first_bar_date = str(bars[0].get("date", "")).strip()[:10] if bars else ""
+        last_bar_date = str(bars[-1].get("date", "")).strip()[:10] if bars else ""
         print(f"   📊 {sym} 最新={today_change_pct:+.2f}% | "
-              f"close[-1]={latest_close} ({latest_date}) | "
-              f"close[-2]={prev_close} ({prev_date}) | "
-              f"n_bars={len(bars)} ({first_bar_date}~{latest_date}) | "
+              f"current={current} ({current_source}, 假設日期={current_date_assumed}) | "
+              f"prev_close={prev_close} ({prev_date}) | "
+              f"bars=[{first_bar_date}~{last_bar_date}] n={len(bars)} | "
               f"TW={today_str}",
               flush=True)
 
