@@ -471,12 +471,14 @@ with st.sidebar:
         else:
             # Step 2: 補空白名稱(同時補股票部位 + 股票交易)
             n_filled_pos = 0
-            n_filled_trades = 0
+            n_filled_wl = 0
+            wl_diag: list[str] = []   # 追蹤清單診斷:哪幾檔卡哪
             with st.spinner("⏳ 步驟 2/2:補上空白的股票名稱…"):
                 try:
                     from fugle_agent.tools import _lookup_stock_name
-                    # 2a) 股票部位的空白名稱
                     name_cache: dict[str, str] = {}
+
+                    # 2a) 股票部位
                     for p in (_sh.load_positions() or []):
                         if p.get("_error"):
                             continue
@@ -491,24 +493,51 @@ with st.sidebar:
                                     name=new_name, 名稱=new_name)
                                 if wb.get("ok"):
                                     n_filled_pos += 1
-                    # 2b) 股票交易裡空白的名稱(暴力做法:重發 add_trade 沒辦法,
-                    # 改用 Apps Script 一個新動作會更乾淨。目前先只補部位 + 追蹤清單。)
-                    for w in (_sh.load_watchlist() or []):
+
+                    # 2b) 追蹤清單 — 帶完整診斷
+                    wl_rows = _sh.load_watchlist() or []
+                    n_total = len(wl_rows)
+                    n_already = 0
+                    n_lookup_fail = 0
+                    n_upsert_fail = 0
+                    for w in wl_rows:
                         if w.get("_error"):
+                            wl_diag.append(f"row error: {w.get('_error')}")
                             continue
                         sym = str(w.get("symbol") or w.get("代號") or "").strip()
                         cur_name = str(w.get("name") or w.get("名稱") or "").strip()
-                        if sym and not cur_name:
-                            new_name = name_cache.get(sym) or _lookup_stock_name(sym)
-                            if new_name:
-                                name_cache[sym] = new_name
-                                wb = _sw.upsert_watchlist_item(
-                                    symbol=sym, 代號=sym,
-                                    name=new_name, 名稱=new_name)
-                                if wb.get("ok"):
-                                    n_filled_trades += 1
+                        if not sym:
+                            continue
+                        if cur_name:
+                            n_already += 1
+                            continue
+                        new_name = name_cache.get(sym) or _lookup_stock_name(sym)
+                        if not new_name:
+                            n_lookup_fail += 1
+                            if len(wl_diag) < 10:
+                                wl_diag.append(f"❌ {sym}: 查不到名稱(Fugle quote 也無)")
+                            continue
+                        name_cache[sym] = new_name
+                        wb = _sw.upsert_watchlist_item(
+                            symbol=sym, 代號=sym,
+                            name=new_name, 名稱=new_name)
+                        if wb.get("ok"):
+                            n_filled_wl += 1
+                        else:
+                            n_upsert_fail += 1
+                            if len(wl_diag) < 10:
+                                wl_diag.append(
+                                    f"⚠️ {sym} ({new_name}): "
+                                    f"upsert 失敗:{wb.get('error', 'unknown')[:80]}")
+                    # 簡要統計
+                    wl_diag.insert(0,
+                        f"追蹤清單 {n_total} 筆 → 已有名稱 {n_already}、"
+                        f"查不到 {n_lookup_fail}、寫入失敗 {n_upsert_fail}、"
+                        f"補成功 {n_filled_wl}")
                 except Exception as e:
-                    st.warning(f"⚠️ 補名字失敗(部位/損益還是有重算完):{type(e).__name__}: {e}")
+                    st.warning(f"⚠️ 補名字失敗(部位/損益還是有重算完):"
+                                f"{type(e).__name__}: {e}")
+            n_filled_trades = n_filled_wl   # 沿用舊變數名給後續訊息
 
             # 記錄完成時間
             import datetime as _dt
@@ -522,6 +551,11 @@ with st.sidebar:
                     f"{n_filled_trades} 筆追蹤清單名稱")
             st.success(" / ".join(msg_parts))
             st.toast("📋 部位+損益已更新", icon="✅")
+            # 顯示追蹤清單補名稱的診斷資訊(展開可見)
+            if wl_diag:
+                with st.expander("🔍 追蹤清單補名稱詳細(展開看)", expanded=False):
+                    for line in wl_diag:
+                        st.code(line)
 
     if st.button("🛑 終止所有跑中", use_container_width=True,
                   help="把所有正在 GitHub 跑的 workflow 全部取消"):
