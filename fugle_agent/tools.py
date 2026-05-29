@@ -2474,33 +2474,33 @@ def _compute_short_signals(sym: str) -> dict:
         except Exception:
             pass
 
-        # 1) 今天表現 — 用「日期」找「最近一個非今日」的收盤
-        # 用台北時間(UTC+8),不要用 GitHub Actions runner 的 UTC,
-        # 不然清晨/午夜跑時 today_str 會跨日、fallback 邏輯出錯。
+        # 1) 最新表現 — 用 Fugle K 線最新 2 根 close 比較,可靠
+        # 例:今天剛開盤前 → 顯示「5/28 漲 +1.5%」(昨日 vs 前天)
+        #     盤中 → 顯示「今天 漲 +0.8%」(今日 vs 昨日)
+        #     收盤後 → 顯示「今天 跌 -0.5%」
+        # 不再說「平盤」— 用 ±0.05% 當「沒漲沒跌」的真實平盤判斷。
         _tw_now = datetime.now(timezone(timedelta(hours=8)))
         today_str = _tw_now.strftime("%Y-%m-%d")
-        prev_close = None
-        prev_vol = None
-        prev_date = ""
-        for bar in reversed(bars):
-            bar_date = str(bar.get("date", "")).strip()[:10]
-            if bar_date and bar_date < today_str:
-                prev_close = bar.get("close")
-                prev_vol = bar.get("volume")
-                prev_date = bar_date
-                break
-        if prev_close is None:
-            prev_close = closes[-2] if len(closes) >= 2 else current
-            prev_date = "(找不到非今日 bar)"
-        today_change_pct = (current / prev_close - 1) * 100 if prev_close else 0
+        if len(closes) >= 2:
+            latest_close = closes[-1]
+            prev_close = closes[-2]
+            latest_date = str(bars[-1].get("date", "")).strip()[:10]
+            prev_date = str(bars[-2].get("date", "")).strip()[:10]
+        else:
+            latest_close = closes[-1] if closes else current
+            prev_close = current
+            latest_date = ""
+            prev_date = ""
+        today_change_pct = ((latest_close / prev_close - 1) * 100
+                            if prev_close else 0)
         today_vol = volumes[-1] if volumes else 0
 
-        # Debug log(GitHub Actions log 看得到)— 之後怪 case 可以追
-        if abs(today_change_pct) > 0.01:
-            print(f"   📊 {sym} today={today_change_pct:+.2f}% | "
-                  f"current={current} ({current_source}) | "
-                  f"prev={prev_close} ({prev_date}) | TW today={today_str}",
-                  flush=True)
+        # Debug log(GitHub Actions log 看得到)
+        print(f"   📊 {sym} 最新={today_change_pct:+.2f}% | "
+              f"close[-1]={latest_close} ({latest_date}) | "
+              f"close[-2]={prev_close} ({prev_date}) | TW={today_str}",
+              flush=True)
+
         avg_vol_20 = (sum(volumes[-20:]) / min(len(volumes), 20)) if volumes else 0
         vol_ratio_today = (today_vol / avg_vol_20) if avg_vol_20 else 1.0
         if vol_ratio_today >= 1.8:
@@ -2513,16 +2513,34 @@ def _compute_short_signals(sym: str) -> dict:
             vol_phrase = "量稍小"
         else:
             vol_phrase = "量正常"
-        if today_change_pct >= 2:
-            today_desc = f"今天漲 +{today_change_pct:.1f}%、{vol_phrase}"
-        elif today_change_pct >= 0.5:
-            today_desc = f"今天微漲 +{today_change_pct:.1f}%、{vol_phrase}"
-        elif today_change_pct >= -0.5:
-            today_desc = f"今天平盤、{vol_phrase}"
-        elif today_change_pct >= -2:
-            today_desc = f"今天微跌 {today_change_pct:.1f}%、{vol_phrase}"
+
+        # 日期 label:今天 vs 「5/28」這種短格式
+        if latest_date == today_str:
+            when_label = "今天"
+        elif latest_date:
+            parts = latest_date.split("-")
+            if len(parts) == 3:
+                when_label = f"{int(parts[1])}/{int(parts[2])}"
+            else:
+                when_label = latest_date
         else:
-            today_desc = f"今天跌 {today_change_pct:.1f}%、{vol_phrase}"
+            when_label = "最近"
+
+        # 描述 — 不再說「平盤」,只在真的 ±0.05% 內才說「沒漲沒跌」
+        if today_change_pct >= 2:
+            today_desc = f"{when_label}漲 +{today_change_pct:.1f}%、{vol_phrase}"
+        elif today_change_pct >= 0.5:
+            today_desc = f"{when_label}微漲 +{today_change_pct:.1f}%、{vol_phrase}"
+        elif today_change_pct >= 0.05:
+            today_desc = f"{when_label}小漲 +{today_change_pct:.2f}%、{vol_phrase}"
+        elif today_change_pct <= -2:
+            today_desc = f"{when_label}跌 {today_change_pct:.1f}%、{vol_phrase}"
+        elif today_change_pct <= -0.5:
+            today_desc = f"{when_label}微跌 {today_change_pct:.1f}%、{vol_phrase}"
+        elif today_change_pct <= -0.05:
+            today_desc = f"{when_label}小跌 {today_change_pct:.2f}%、{vol_phrase}"
+        else:
+            today_desc = f"{when_label}沒漲沒跌、{vol_phrase}"
 
         # 2) 最近 3 天
         change_3d_pct = (current / closes[-4] - 1) * 100 if len(closes) >= 4 else 0
@@ -3102,6 +3120,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                     "symbol": sym, "代號": sym,
                     "name":   name, "名稱": name,
                     "今天表現":     f"❌ Fugle 抓 K 線失敗:{err_short}",
+                    "最新表現":     f"❌ Fugle 抓 K 線失敗:{err_short}",
                     "最近3天":      "—",
                     "這週氛圍":     "—",
                     "近10天走勢":   "—",
@@ -3134,6 +3153,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                 "損益":         round(pnl, 2),
                 "損益%":        round(pnl_pct, 2),
                 "今天表現":     signals["today_desc"],
+                "最新表現":     signals["today_desc"],
                 "最近3天":      signals["last3d_desc"],
                 "這週氛圍":     signals["weekly_mood_desc"],
                 "近10天走勢":   signals["ma10_desc"],
@@ -3258,6 +3278,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                     "symbol": sym, "代號": sym,
                     "name":   name, "名稱": name,
                     "今天表現":     f"❌ Fugle 抓 K 線失敗:{err_short}",
+                    "最新表現":     f"❌ Fugle 抓 K 線失敗:{err_short}",
                     "最近3天":      "—",
                     "這週氛圍":     "—",
                     "近10天走勢":   "—",
@@ -3278,6 +3299,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
             tech_payload = {
                 "現價":         signals["current_price"],
                 "今天表現":     signals["today_desc"],
+                "最新表現":     signals["today_desc"],
                 "最近3天":      signals["last3d_desc"],
                 "這週氛圍":     signals["weekly_mood_desc"],
                 "近10天走勢":   signals["ma10_desc"],
