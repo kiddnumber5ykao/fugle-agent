@@ -282,6 +282,67 @@ def _job_indicator(key: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Helper:終止所有正在跑的 GitHub Actions runs
+# ---------------------------------------------------------------------------
+def _cancel_all_running_workflows() -> dict:
+    """打 GitHub API 取消所有 status=in_progress 或 queued 的 run。"""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    pat = (os.environ.get("GITHUB_PAT") or "").strip()
+    repo = (os.environ.get("GITHUB_REPO") or "kiddnumber5ykao/fugle-agent").strip()
+    if not pat:
+        return {"ok": False, "error": "沒設 GITHUB_PAT"}
+
+    headers = {
+        "Accept":               "application/vnd.github+json",
+        "Authorization":        f"Bearer {pat}",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent":           "fugle-agent/0.1",
+    }
+    cancelled: list = []
+    errors: list = []
+    for status in ("in_progress", "queued"):
+        try:
+            list_url = (f"https://api.github.com/repos/{repo}/actions/runs"
+                        f"?status={status}&per_page=30")
+            req = urllib.request.Request(list_url, headers=headers, method="GET")
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                runs_data = _json.loads(resp.read().decode("utf-8"))
+            for run in (runs_data.get("workflow_runs") or []):
+                run_id = run.get("id")
+                if not run_id:
+                    continue
+                cancel_url = (f"https://api.github.com/repos/{repo}/actions"
+                              f"/runs/{run_id}/cancel")
+                creq = urllib.request.Request(cancel_url, headers=headers, method="POST")
+                try:
+                    with urllib.request.urlopen(creq, timeout=10) as cresp:
+                        if cresp.status in (200, 202):
+                            cancelled.append({
+                                "id":   run_id,
+                                "name": run.get("name", ""),
+                                "status": status,
+                            })
+                except urllib.error.HTTPError as ce:
+                    errors.append(f"run {run_id}: HTTP {ce.code}")
+        except Exception as e:
+            errors.append(f"list {status}: {type(e).__name__}: {e}")
+
+    # 同時清掉 session_state 的 job indicators (狀態歸零)
+    if "job_states" in st.session_state:
+        st.session_state.job_states = {}
+
+    return {
+        "ok":         True,
+        "cancelled":  cancelled,
+        "n_cancelled": len(cancelled),
+        "errors":     errors,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Helper:透過 GitHub Actions API 觸發背景 workflow
 # ---------------------------------------------------------------------------
 def _trigger_github_workflow(workflow_file: str,
@@ -390,9 +451,11 @@ with st.sidebar:
             else:
                 st.error(f"❌ {res.get('error')}")
 
-    if st.button("📋 重算部位+損益", use_container_width=True,
+    _resync_label = f"📋 重算部位+損益{_job_indicator('pos_resync')}"
+    if st.button(_resync_label, use_container_width=True,
                   help="剛在股票交易加/改/刪交易後按這個 — 重算股票部位、實際損益、"
                        "5/10/15/20% 目標賣價公式,並自動補空白的股票名稱。30-60 秒。"):
+        _mark_job_started("pos_resync", 90)
         from fugle_agent import sheets_writer as _sw
         from fugle_agent import sheets as _sh
         # Step 1: 跑 Apps Script 同步
@@ -458,6 +521,22 @@ with st.sidebar:
                     f"{n_filled_trades} 筆追蹤清單名稱")
             st.success(" / ".join(msg_parts))
             st.toast("📋 部位+損益已更新", icon="✅")
+
+    if st.button("🛑 終止所有跑中", use_container_width=True,
+                  help="把所有正在 GitHub 跑的 workflow 全部取消"):
+        with st.spinner("⏳ 取消所有跑中的 workflow…"):
+            res = _cancel_all_running_workflows()
+        if res.get("ok"):
+            n = res.get("n_cancelled", 0)
+            if n > 0:
+                st.success(f"✅ 已取消 {n} 個跑中的 workflow")
+            else:
+                st.info("沒有跑中的 workflow")
+            if res.get("errors"):
+                st.warning(f"部分錯誤:{res['errors']}")
+        else:
+            st.error(f"❌ {res.get('error')}")
+        st.rerun()
 
     if st.button("🔁 重新整理頁面", use_container_width=True,
                   help="重新讀 Sheet 上的最新時間戳跟資料(等於按 F5)"):
