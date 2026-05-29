@@ -2450,6 +2450,9 @@ def _compute_short_signals(sym: str) -> dict:
         if len(bars) < 7:
             return {"ok": False, "mode": _client.mode,
                     "error": f"K 線只 {len(bars)} 根、不夠分析"}
+        # 🛡️ 強制按日期升冪排序 — Fugle 不保證回傳順序,有些股票會反序
+        # 排序後 bars[-1] 一定是最新一根
+        bars = sorted(bars, key=lambda b: str(b.get("date", "")).strip())
         closes = [b["close"] for b in bars]
         volumes = [b.get("volume", 0) for b in bars]
 
@@ -2495,10 +2498,13 @@ def _compute_short_signals(sym: str) -> dict:
                             if prev_close else 0)
         today_vol = volumes[-1] if volumes else 0
 
-        # Debug log(GitHub Actions log 看得到)
+        # Debug log(GitHub Actions log 看得到)— 完整 trace 方便追問題
+        first_bar_date = str(bars[0].get("date", "")).strip()[:10] if bars else ""
         print(f"   📊 {sym} 最新={today_change_pct:+.2f}% | "
               f"close[-1]={latest_close} ({latest_date}) | "
-              f"close[-2]={prev_close} ({prev_date}) | TW={today_str}",
+              f"close[-2]={prev_close} ({prev_date}) | "
+              f"n_bars={len(bars)} ({first_bar_date}~{latest_date}) | "
+              f"TW={today_str}",
               flush=True)
 
         avg_vol_20 = (sum(volumes[-20:]) / min(len(volumes), 20)) if volumes else 0
@@ -2621,6 +2627,7 @@ def _compute_short_signals(sym: str) -> dict:
             "mode":             _client.mode,
             "n_bars":           len(bars),
             "current_price":    round(current, 2),
+            "latest_date":      latest_date,         # 給 Sheet「資料日期」欄用
             # White-language descriptions
             "today_desc":       today_desc,
             "last3d_desc":      last3d_desc,
@@ -2725,7 +2732,8 @@ JSON 格式(每個欄位都要):
   "institutional": "法人籌碼白話描述",
   "institutional_score": int,
   "news": "近期 1-2 週新聞重點",
-  "news_score": int
+  "news_score": int,
+  "data_date": "你查到資料的最新日期 (YYYY-MM-DD 格式,例如 2026-05-28),通常是最新新聞或月營收的日期"
 }
 
 評分標準(全部 int):
@@ -2735,7 +2743,8 @@ JSON 格式(每個欄位都要):
 - institutional: 連續賣超→-2 / 賣超→-1 / 持平→0 / 買超→1 / 大買→2
 - news: 重大利空→-2 / 利空→-1 / 中性→0 / 利多→1 / 重大利多→2
 
-用白話、不要術語。資料找不到該項就寫「資料不足」+ score 設 0。"""
+用白話、不要術語。資料找不到該項就寫「資料不足」+ score 設 0。
+data_date 找不到具體日期就寫今天日期。"""
 
 
 def _fetch_fundamentals(sym: str, name: str) -> dict:
@@ -2848,6 +2857,7 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
             "revenue":             str(data.get("revenue", "資料不足")),
             "institutional":       str(data.get("institutional", "資料不足")),
             "news":                str(data.get("news", "資料不足")),
+            "data_date":           str(data.get("data_date", "")).strip()[:10],
             "estimate_score":      _safe_int(data.get("estimate_score")),
             "dividend_score":      _safe_int(data.get("dividend_score")),
             "revenue_score":       _safe_int(data.get("revenue_score")),
@@ -3121,6 +3131,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                     "name":   name, "名稱": name,
                     "今天表現":     f"❌ Fugle 抓 K 線失敗:{err_short}",
                     "最新表現":     f"❌ Fugle 抓 K 線失敗:{err_short}",
+                    "技術資料時間": "(失敗)",
                     "最近3天":      "—",
                     "這週氛圍":     "—",
                     "近10天走勢":   "—",
@@ -3154,6 +3165,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                 "損益%":        round(pnl_pct, 2),
                 "今天表現":     signals["today_desc"],
                 "最新表現":     signals["today_desc"],
+                "技術資料時間": signals.get("latest_date", ""),
                 "最近3天":      signals["last3d_desc"],
                 "這週氛圍":     signals["weekly_mood_desc"],
                 "近10天走勢":   signals["ma10_desc"],
@@ -3185,6 +3197,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                     "籌碼面燈號":      chips_light,
                     "公司面燈號":      company_light,
                     "基本面整理時間":   organized_at,
+                    "基本面資料時間":   fd.get("data_date", ""),
                 }
             else:
                 err_short = str(fd.get("error", "未知錯誤"))[:300]
@@ -3199,6 +3212,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                     "籌碼面燈號":      "—",
                     "公司面燈號":      "—",
                     "基本面整理時間":   f"{organized_at} (失敗)",
+                    "基本面資料時間":   "(失敗)",
                 }
         else:
             chips_light = prev.get("chips", "")
@@ -3279,6 +3293,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                     "name":   name, "名稱": name,
                     "今天表現":     f"❌ Fugle 抓 K 線失敗:{err_short}",
                     "最新表現":     f"❌ Fugle 抓 K 線失敗:{err_short}",
+                    "技術資料時間": "(失敗)",
                     "最近3天":      "—",
                     "這週氛圍":     "—",
                     "近10天走勢":   "—",
@@ -3300,6 +3315,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                 "現價":         signals["current_price"],
                 "今天表現":     signals["today_desc"],
                 "最新表現":     signals["today_desc"],
+                "技術資料時間": signals.get("latest_date", ""),
                 "最近3天":      signals["last3d_desc"],
                 "這週氛圍":     signals["weekly_mood_desc"],
                 "近10天走勢":   signals["ma10_desc"],
@@ -3329,6 +3345,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                     "籌碼面燈號":      chips_light,
                     "公司面燈號":      company_light,
                     "基本面整理時間":   organized_at,
+                    "基本面資料時間":   fd.get("data_date", ""),
                 }
             else:
                 err_short = str(fd.get("error", "未知錯誤"))[:300]
@@ -3343,6 +3360,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                     "籌碼面燈號":      "—",
                     "公司面燈號":      "—",
                     "基本面整理時間":   f"{organized_at} (失敗)",
+                    "基本面資料時間":   "(失敗)",
                 }
         else:
             chips_light = prev.get("chips", "")
