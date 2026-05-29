@@ -292,17 +292,39 @@ def _now_tw() -> str:
 # (claude-agent-sdk) and our fallback shim.
 _HANDLERS = {t.name: t.handler for t in ALL_TOOLS}
 
+# 會「寫入 / 改動 Google Sheet」的工具 — 唯讀模式(對話)會把這些拿掉,
+# 讓對話永遠不會動到 Sheet。要改 Sheet 只能透過 sidebar 開關 / 按鈕。
+WRITE_TOOL_NAMES = {
+    "log_stock_trade",
+    "log_fund_trade",
+    "rebuild_positions_from_trades",
+    "rebuild_funds_from_trades",
+    "backfill_position_names",
+    "backfill_fund_names",
+    "valuate_portfolio",
+    "sync_portfolio_from_trades",
+    "get_realized_pnl",          # 會把 realized_pnl 寫回股票交易
+    "record_etf_snapshot",
+    "compute_target_sell_prices",
+    "organize_all_technical",
+    "organize_all_deep",
+}
+
 
 WEB_SEARCH_MAX_USES = int(os.getenv("WEB_SEARCH_MAX_USES", "5"))
 
 
-def _anthropic_tool_specs() -> list[dict]:
+def _anthropic_tool_specs(read_only: bool = False) -> list[dict]:
     """Custom (client-side) tools + Anthropic-managed server tools (web_search).
 
     Server tool 放前面、custom tools 放後面,並在「最後一個 custom tool」掛
     cache_control,讓 Anthropic 把整份工具定義(連同前面的 system prompt)
     快取起來,後續呼叫付 10% 費率。
+
+    read_only=True 時把所有會寫入 Sheet 的工具拿掉(對話唯讀模式)。
     """
+    custom = [t for t in ALL_TOOLS
+              if not (read_only and t.name in WRITE_TOOL_NAMES)]
     specs: list[dict] = []
     # 1) 先放 server tool(每次都要新鮮,放前面也可以 — 反正它在 cache_control 之前)
     specs.append({
@@ -311,14 +333,14 @@ def _anthropic_tool_specs() -> list[dict]:
         "max_uses": WEB_SEARCH_MAX_USES,
     })
     # 2) 接著所有 custom tools
-    for i, t in enumerate(ALL_TOOLS):
+    for i, t in enumerate(custom):
         entry = {
             "name": t.name,
             "description": t.description,
             "input_schema": t.input_schema,
         }
         # 最後一個 custom tool 加 cache_control — 會 cache 上方整份工具定義
-        if i == len(ALL_TOOLS) - 1:
+        if i == len(custom) - 1:
             entry["cache_control"] = {"type": "ephemeral"}
         specs.append(entry)
     return specs
@@ -557,7 +579,8 @@ def _trim_history_inplace(history: list, *, max_messages: int) -> int:
 
 # ---------- main loop ----------
 
-async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[dict]:
+async def run_turn_streaming(user_input: str, history: list,
+                             read_only: bool = False) -> AsyncIterator[dict]:
     """Run one conversational turn, yielding events for each meaningful unit
     of work.  ``history`` is mutated in place so subsequent turns get context.
 
@@ -572,7 +595,7 @@ async def run_turn_streaming(user_input: str, history: list) -> AsyncIterator[di
         timeout=ANTHROPIC_TIMEOUT,
         max_retries=ANTHROPIC_MAX_RETRIES,
     )
-    tools = _anthropic_tool_specs()
+    tools = _anthropic_tool_specs(read_only=read_only)
     mode_str = "mock" if SETTINGS.mock else "live"
 
     # System prompt 分成兩塊:穩定的(掛 cache_control 給 Anthropic 快取)

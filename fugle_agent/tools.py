@@ -2782,8 +2782,8 @@ def _super_short_term_light(signals: dict) -> str:
 # 避免一次性吃光 Anthropic Tier 1 的 RPM / TPM 配額(50K input tokens/min)
 # 在並行模式下這個 gap 變成「兩個 thread 之間的最小間隔」,實際整體節奏由
 # ThreadPoolExecutor(max_workers) 控制。
-_FETCH_FUNDAMENTALS_GAP_SEC = 2   # 並行模式下可以縮短
-_FETCH_PARALLEL_WORKERS = 3        # 同時跑 3 檔
+_FETCH_FUNDAMENTALS_GAP_SEC = 3   # 兩次呼叫間最小間隔(秒)
+_FETCH_PARALLEL_WORKERS = 2        # 降到 2 檔並行,降低每分鐘 token 爆量機率
 _last_fundamentals_call_ts: float = 0.0
 _fundamentals_session_cache: dict[str, dict] = {}   # sym → result,跨 organize 共用
 
@@ -2824,6 +2824,12 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
     沒設 ANTHROPIC_API_KEY 或失敗時回 ok=False。
     內建節流避免 429,並支援同 session 快取(同一檔不重複查)。"""
     global _last_fundamentals_call_ts
+
+    # ⚠️ 這個 helper 一定要先定義 — 不然錯誤路徑(429 等)會 UnboundLocalError 整個崩潰
+    def _store_and_return(result: dict) -> dict:
+        _fundamentals_session_cache[sym] = result
+        return result
+
     # Session 快取:同一檔在同一次 deep analysis 內如果已查過,直接回傳
     if sym in _fundamentals_session_cache:
         return _fundamentals_session_cache[sym]
@@ -2836,11 +2842,11 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
 
     api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
     if not api_key:
-        return {"ok": False, "error": "ANTHROPIC_API_KEY 未設"}
+        return _store_and_return({"ok": False, "error": "ANTHROPIC_API_KEY 未設"})
     try:
         from anthropic import Anthropic
     except ImportError:
-        return {"ok": False, "error": "anthropic SDK 未安裝"}
+        return _store_and_return({"ok": False, "error": "anthropic SDK 未安裝"})
 
     client = Anthropic()
     # 用 `or default` 而不是 getenv default,這樣空字串也會 fallback
@@ -2851,10 +2857,11 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
     # 第 1 檔正常付費,後面 11 檔 system 部分便宜 90%(Anthropic prompt caching)
     user_msg = f"查台股 {sym} {name}".strip()
 
-    # 主呼叫 + 429 重試:遇到 RateLimitError 就 sleep 30 秒重試一次
+    # 主呼叫 + 429 重試:每分鐘 token 配額(50K)爆掉時,等 60 秒讓配額重置再試。
+    # 配額是「每分鐘」,所以 sleep 要夠長(60s),且多試幾次才有意義。
     resp = None
     last_err = None
-    for attempt in range(2):
+    for attempt in range(4):
         try:
             resp = client.messages.create(
                 model=model,
@@ -2871,11 +2878,15 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
         except Exception as e:
             last_err = e
             err_str = str(e).lower()
-            if "429" in err_str or "rate" in err_str or "rate_limit" in err_str:
-                if attempt == 0:
-                    time.sleep(30)   # 等配額重置
-                    continue
-            # 其他錯誤直接放棄 — 印 stderr 方便 Actions log debug
+            is_rate = ("429" in err_str or "rate_limit" in err_str
+                       or "rate limit" in err_str)
+            if is_rate and attempt < 3:
+                wait = 60 * (attempt + 1)   # 60s, 120s, 180s — 等每分鐘配額重置
+                print(f"⏳ sym={sym} 撞 429,等 {wait}s 後重試"
+                      f"(第 {attempt + 1}/3 次)…", flush=True)
+                time.sleep(wait)
+                continue
+            # 非 rate limit 的錯誤,或重試用完 → 放棄這檔(印 log,但不讓整批崩潰)
             print(f"⚠️ _fetch_fundamentals API 錯誤 sym={sym}: "
                   f"{type(e).__name__}: {e}", flush=True)
             return _store_and_return({
@@ -2889,10 +2900,6 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
             "ok": False,
             "error": f"重試後仍失敗: {last_err}",
         })
-
-    def _store_and_return(result: dict) -> dict:
-        _fundamentals_session_cache[sym] = result
-        return result
 
     try:
         # 🛡️ Anthropic web_search 模式下會有多個 text block(每次 search 前後都有
