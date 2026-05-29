@@ -19,7 +19,7 @@ on:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 30   # 深度分析較久,給 30 分上限
     steps:
       - uses: actions/checkout@v4
 
