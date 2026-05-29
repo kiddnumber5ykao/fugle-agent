@@ -47,45 +47,15 @@ def main() -> None:
 
     t0 = datetime.datetime.now()
     print(f"▶️  開始跑 重算+補名稱 @ {t0.isoformat(timespec='seconds')}")
-
-    # Step 1: 打 Apps Script manual_sync(從股票交易重建股票部位 + 實際損益)
-    print("▶️  Step 1/2: manual_sync …")
-    try:
-        sync_res = _sw.manual_sync(timeout=120)
-    except Exception as e:
-        print(f"❌ manual_sync exception: {type(e).__name__}: {e}")
-        sys.exit(3)
-    if not sync_res.get("ok"):
-        print(f"❌ manual_sync failed: {sync_res.get('error')}")
-        sys.exit(3)
-    dt1 = (datetime.datetime.now() - t0).total_seconds()
-    print(f"   ✅ manual_sync 完成 @ +{dt1:.1f}s")
-
-    # Step 2: 補空白名稱(股票部位 + 追蹤清單)
-    print("▶️  Step 2/2: 補空白名稱 …")
     name_cache: dict[str, str] = {}
     n_filled_pos = 0
     n_filled_wl = 0
-    try:
-        # 2a) 股票部位
-        for p in (_sh.load_positions() or []):
-            if p.get("_error"):
-                continue
-            sym = str(p.get("symbol") or "").strip()
-            cur_name = str(p.get("name") or "").strip()
-            if not sym or cur_name:
-                continue
-            new_name = name_cache.get(sym) or _lookup_stock_name(sym)
-            if not new_name:
-                continue
-            name_cache[sym] = new_name
-            wb = _sw.upsert_position(
-                symbol=sym, 代號=sym,
-                name=new_name, 名稱=new_name)
-            if wb.get("ok"):
-                n_filled_pos += 1
 
-        # 2b) 追蹤清單
+    # Step 1: 先補「追蹤清單」名稱 — 放在 manual_sync 之前,
+    # 這樣等下 manual_sync 重建「實際損益」時,連已賣光的股票也查得到名稱
+    #(Apps Script 的名稱對照表會讀追蹤清單)。
+    print("▶️  Step 1/3: 先補追蹤清單名稱 …")
+    try:
         for w in (_sh.load_watchlist() or []):
             if w.get("_error"):
                 continue
@@ -103,7 +73,43 @@ def main() -> None:
             if wb.get("ok"):
                 n_filled_wl += 1
     except Exception as e:
-        print(f"⚠️ 補名字失敗: {type(e).__name__}: {e}")
+        print(f"⚠️ 補追蹤清單名稱失敗: {type(e).__name__}: {e}")
+    print(f"   追蹤清單補了 {n_filled_wl} 筆")
+
+    # Step 2: 打 Apps Script manual_sync(從股票交易重建股票部位 + 實際損益)
+    print("▶️  Step 2/3: manual_sync …")
+    try:
+        sync_res = _sw.manual_sync(timeout=120)
+    except Exception as e:
+        print(f"❌ manual_sync exception: {type(e).__name__}: {e}")
+        sys.exit(3)
+    if not sync_res.get("ok"):
+        print(f"❌ manual_sync failed: {sync_res.get('error')}")
+        sys.exit(3)
+    dt1 = (datetime.datetime.now() - t0).total_seconds()
+    print(f"   ✅ manual_sync 完成 @ +{dt1:.1f}s")
+
+    # Step 3: 補「股票部位」名稱(重建後若還有空白)
+    print("▶️  Step 3/3: 補股票部位名稱 …")
+    try:
+        for p in (_sh.load_positions() or []):
+            if p.get("_error"):
+                continue
+            sym = str(p.get("symbol") or "").strip()
+            cur_name = str(p.get("name") or "").strip()
+            if not sym or cur_name:
+                continue
+            new_name = name_cache.get(sym) or _lookup_stock_name(sym)
+            if not new_name:
+                continue
+            name_cache[sym] = new_name
+            wb = _sw.upsert_position(
+                symbol=sym, 代號=sym,
+                name=new_name, 名稱=new_name)
+            if wb.get("ok"):
+                n_filled_pos += 1
+    except Exception as e:
+        print(f"⚠️ 補股票部位名稱失敗: {type(e).__name__}: {e}")
 
     dt = (datetime.datetime.now() - t0).total_seconds()
     print(f"✅ 全部完成 @ +{dt:.1f}s")
