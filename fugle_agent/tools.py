@@ -2725,7 +2725,7 @@ def _compute_short_signals(sym: str) -> dict:
 def _short_term_light(signals: dict) -> str:
     """短線燈號 (A) — 5-10 天視角 — 用 RSI7 + MA10 + 3 天動能 + 20 天區間位置。"""
     if not signals.get("ok"):
-        return "—"
+        return "⚪ 資料不足"
     score = 0
     r = signals["rsi7"]
     if   r >= 60: score += 2
@@ -2755,7 +2755,7 @@ def _short_term_light(signals: dict) -> str:
 def _super_short_term_light(signals: dict) -> str:
     """超短線燈號 (B) — 2-5 天視角 — 重今天表現 + 量 + 3 天動能。"""
     if not signals.get("ok"):
-        return "—"
+        return "⚪ 資料不足"
     score = 0
     t = signals["today_change_pct"]
     if   t >= 2:    score += 2
@@ -2783,7 +2783,7 @@ def _super_short_term_light(signals: dict) -> str:
 # 在並行模式下這個 gap 變成「兩個 thread 之間的最小間隔」,實際整體節奏由
 # ThreadPoolExecutor(max_workers) 控制。
 _FETCH_FUNDAMENTALS_GAP_SEC = 3   # 兩次呼叫間最小間隔(秒)
-_FETCH_PARALLEL_WORKERS = 2        # 降到 2 檔並行,降低每分鐘 token 爆量機率
+_FETCH_PARALLEL_WORKERS = 2        # Tier 2 token 夠用 → 2 檔並行(撞 429 仍會耐心重試)
 _last_fundamentals_call_ts: float = 0.0
 _fundamentals_session_cache: dict[str, dict] = {}   # sym → result,跨 organize 共用
 
@@ -2871,6 +2871,8 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
                     "text": _FUNDAMENTALS_SYSTEM_PROMPT,
                     "cache_control": {"type": "ephemeral"},
                 }],
+                # Tier 2 token 夠用 → web_search 查 4 次,基本面查得更深。
+                # (撞 429 仍有耐心重試保底;Tier 1 想省 token 可改回 2)
                 tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 4}],
                 messages=[{"role": "user", "content": user_msg}],
             )
@@ -3022,9 +3024,14 @@ def _prefetch_fundamentals_parallel(items: list[tuple[str, str]]) -> None:
 
 
 def _company_light_v2(fund: dict) -> str:
-    """公司面燈號 — 估值 + 配息 + 營收。"""
+    """公司面燈號 — 估值 + 配息 + 營收。
+    3 項裡有 2 項以上「資料不足」→ 給 ⚪ 資料不足(不裝中性)。"""
     if not fund.get("ok"):
-        return "—"
+        return "⚪ 資料不足"
+    missing = sum(1 for k in ("estimate", "dividend", "revenue")
+                  if "資料不足" in str(fund.get(k, "")))
+    if missing >= 2:
+        return "⚪ 資料不足"
     score = fund["estimate_score"] + fund["dividend_score"] + fund["revenue_score"]
     if score >= 3:  return "🟢 強"
     if score >= -1: return "🟡 平淡"
@@ -3032,9 +3039,14 @@ def _company_light_v2(fund: dict) -> str:
 
 
 def _chips_light_v2(fund: dict) -> str:
-    """籌碼面燈號 — 法人籌碼 + 新聞。"""
+    """籌碼面燈號 — 法人籌碼 + 新聞。
+    2 項都「資料不足」→ 給 ⚪ 資料不足(不裝中性)。"""
     if not fund.get("ok"):
-        return "—"
+        return "⚪ 資料不足"
+    missing = sum(1 for k in ("institutional", "news")
+                  if "資料不足" in str(fund.get(k, "")))
+    if missing >= 2:
+        return "⚪ 資料不足"
     score = fund["institutional_score"] + fund["news_score"]
     if score >= 2:  return "🟢 強"
     if score >= -1: return "🟡 平淡"
@@ -3046,14 +3058,23 @@ def _combined_advice(short_light: str, super_short_light: str,
                      is_position: bool) -> str:
     """根據 4 個燈號給綜合建議文字。沒有基本面 (—) 時,只用技術版本。"""
     def _e(light: str) -> str:
+        if "⚪" in light or "資料不足" in light: return "⚪"  # 資料不足,跟中性區分
         if "🟢" in light: return "🟢"
         if "🟡" in light: return "🟡"
         if "🔴" in light: return "🔴"
         return "—"
     s, ss, ch, co = _e(short_light), _e(super_short_light), _e(chips_light), _e(company_light)
 
-    # 沒有基本面(只跑技術)→ 簡化版
-    if ch == "—" and co == "—":
+    # ⚪ 跟 — 都當作「沒有可用資訊」
+    _no_tech = s in ("—", "⚪") and ss in ("—", "⚪")
+    _no_fund = ch in ("—", "⚪") and co in ("—", "⚪")
+
+    # 技術 + 基本面「都」沒資料 → 直接講清楚,不要裝中性
+    if _no_tech and _no_fund:
+        return "⚪ 資料不足、無法判斷 — 建議自己查或稍後重跑"
+
+    # 沒有基本面(只跑技術 / 基本面資料不足)→ 簡化版
+    if _no_fund:
         if s == "🟢" and ss == "🟢":
             return "🟢 短期看好(基本面待補,請說「整體深度分析」)"
         if s == "🔴" and ss == "🔴":
@@ -3078,7 +3099,7 @@ def _combined_advice(short_light: str, super_short_light: str,
     else:
         tech_key = "🟡"
 
-    score_map = {"🟢": 1, "🟡": 0, "🔴": -1, "—": 0}
+    score_map = {"🟢": 1, "🟡": 0, "🔴": -1, "—": 0, "⚪": 0}
     f_score = score_map[ch] + score_map[co]
     if f_score >= 1:    fund_key = "🟢"
     elif f_score <= -1: fund_key = "🔴"
@@ -3217,8 +3238,8 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                     "近10天走勢":   "—",
                     "量能變化":     "—",
                     "離20天高低":   "—",
-                    "短線燈號":     "—",
-                    "超短線燈號":   "—",
+                    "短線燈號":     "⚪ 資料不足",
+                    "超短線燈號":   "⚪ 資料不足",
                     "技術整理時間": f"{organized_at} (失敗)",
                 }
                 wb = sheets_writer.upsert_position(**fail_payload)
@@ -3281,16 +3302,16 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                 }
             else:
                 err_short = str(fd.get("error", "未知錯誤"))[:300]
-                chips_light = "—"
-                company_light = "—"
+                chips_light = "⚪ 資料不足"
+                company_light = "⚪ 資料不足"
                 fund_payload = {
                     "估值":           f"❌ API 失敗:{err_short}",
                     "配息":           "—",
                     "營收動能":        "—",
                     "法人籌碼":        "—",
                     "近期新聞重點":    "—",
-                    "籌碼面燈號":      "—",
-                    "公司面燈號":      "—",
+                    "籌碼面燈號":      "⚪ 資料不足",
+                    "公司面燈號":      "⚪ 資料不足",
                     "基本面整理時間":   f"{organized_at} (失敗)",
                     "基本面資料時間":   "(失敗)",
                 }
@@ -3380,8 +3401,8 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                     "近10天走勢":   "—",
                     "量能變化":     "—",
                     "離20天高低":   "—",
-                    "短線燈號":     "—",
-                    "超短線燈號":   "—",
+                    "短線燈號":     "⚪ 資料不足",
+                    "超短線燈號":   "⚪ 資料不足",
                     "技術整理時間": f"{organized_at} (失敗)",
                 }
                 wb = sheets_writer.upsert_watchlist_item(**fail_payload)
@@ -3430,16 +3451,16 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                 }
             else:
                 err_short = str(fd.get("error", "未知錯誤"))[:300]
-                chips_light = "—"
-                company_light = "—"
+                chips_light = "⚪ 資料不足"
+                company_light = "⚪ 資料不足"
                 fund_payload = {
                     "估值":           f"❌ API 失敗:{err_short}",
                     "配息":           "—",
                     "營收動能":        "—",
                     "法人籌碼":        "—",
                     "近期新聞重點":    "—",
-                    "籌碼面燈號":      "—",
-                    "公司面燈號":      "—",
+                    "籌碼面燈號":      "⚪ 資料不足",
+                    "公司面燈號":      "⚪ 資料不足",
                     "基本面整理時間":   f"{organized_at} (失敗)",
                     "基本面資料時間":   "(失敗)",
                 }
