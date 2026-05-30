@@ -1,3 +1,4 @@
+# 📅 最後更新:2026-05-29(手機儀表板版)
 """Streamlit chat UI for the Fugle agent.
 
 Run locally:    streamlit run app.py
@@ -650,6 +651,28 @@ with st.sidebar:
             pass
         st.rerun()
     st.caption("⚠️ 僅供示範,不構成投資建議")
+
+
+# ---------------------------------------------------------------------------
+# 首頁 = 手機儀表板。預設進儀表板,可切換到對話。
+# ---------------------------------------------------------------------------
+if "_view" not in st.session_state:
+    st.session_state["_view"] = "儀表板"
+
+if st.session_state["_view"] == "儀表板":
+    import fugle_agent.dashboard as _dash
+    _dash.render(_trigger_github_workflow, _job_indicator, _mark_job_started)
+    st.divider()
+    if st.button("💬 切換到對話", use_container_width=True):
+        st.session_state["_view"] = "對話"
+        st.rerun()
+    st.caption("⚠️ 僅供示範,不構成投資建議")
+    st.stop()
+
+# 對話模式 — 頂部給一顆回儀表板的按鈕
+if st.button("🏠 回儀表板", use_container_width=True):
+    st.session_state["_view"] = "儀表板"
+    st.rerun()
 
 
 # ---------------------------------------------------------------------------
