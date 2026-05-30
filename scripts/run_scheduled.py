@@ -117,6 +117,15 @@ def main() -> None:
         except Exception:
             pass
 
+    # 【最後一步】讀齊 4 個燈號,重算「我該做啥」— 確保它永遠最後才定稿
+    try:
+        from fugle_agent.tools import _recompute_advice
+        adv = _recompute_advice(scope)
+        print(f"🧭 重算我該做啥:部位 {adv.get('positions')} 筆 / "
+              f"追蹤 {adv.get('watchlist')} 筆")
+    except Exception as e:
+        print(f"⚠️ 重算我該做啥失敗: {type(e).__name__}: {e}")
+
 
 if __name__ == "__main__":
     main()
