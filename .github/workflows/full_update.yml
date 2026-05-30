@@ -1,27 +1,57 @@
-# 📅 最後更新:2026-05-29(全新)
+# 📅 最後更新:2026-05-29(多 job 平行:技術+基本面同時跑)
 name: 全更新 (重算+技術+基本面)
 
 on:
   workflow_dispatch:
 
+env:
+  ANTHROPIC_API_KEY:        ${{ secrets.ANTHROPIC_API_KEY }}
+  FUGLE_MARKETDATA_API_KEY: ${{ secrets.FUGLE_MARKETDATA_API_KEY }}
+  SHEETS_WRITER_URL:        ${{ secrets.SHEETS_WRITER_URL }}
+  PORTFOLIO_SHEET_URL:      ${{ secrets.PORTFOLIO_SHEET_URL }}
+  ANTHROPIC_MODEL:          ${{ secrets.ANTHROPIC_MODEL }}
+  FUGLE_MOCK: "0"
+
 jobs:
-  run:
+  resync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip }
+      - run: pip install -r requirements.txt
+      - run: python scripts/run_step.py resync
+
+  technical:
+    needs: resync
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip }
+      - run: pip install -r requirements.txt
+      - run: python scripts/run_step.py technical
+
+  fundamental:
+    needs: resync
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: pip
-      - name: 安裝套件
-        run: pip install -r requirements.txt
-      - name: 跑全更新
-        env:
-          ANTHROPIC_API_KEY:        ${{ secrets.ANTHROPIC_API_KEY }}
-          FUGLE_MARKETDATA_API_KEY: ${{ secrets.FUGLE_MARKETDATA_API_KEY }}
-          SHEETS_WRITER_URL:        ${{ secrets.SHEETS_WRITER_URL }}
-          PORTFOLIO_SHEET_URL:      ${{ secrets.PORTFOLIO_SHEET_URL }}
-          ANTHROPIC_MODEL:          ${{ secrets.ANTHROPIC_MODEL }}
-          FUGLE_MOCK: "0"
-        run: python scripts/run_update.py full
+        with: { python-version: '3.11', cache: pip }
+      - run: pip install -r requirements.txt
+      - run: python scripts/run_step.py fundamental
+
+  recompute:
+    needs: [technical, fundamental]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip }
+      - run: pip install -r requirements.txt
+      - run: python scripts/run_step.py recompute
