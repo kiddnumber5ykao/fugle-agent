@@ -3276,31 +3276,42 @@ def _what_to_do(short_light: str, super_short_light: str,
     return f"{action}[{reason}]"
 
 
-def resync_and_fill_names() -> dict:
-    """重算交易(manual_sync 重建部位/損益/目標賣價公式)+ 補空白名稱。
-    順序:先補追蹤清單名稱 → manual_sync → 補部位名稱 → 直接補實際損益名稱。
-    (先補追蹤清單名稱,manual_sync 重建實際損益時連賣光的股票也查得到名稱)"""
+def resync_and_fill_names(scope: str = "all") -> dict:
+    """重算交易 + 補空白名稱,**依 scope 只動該動的分頁**:
+      - positions:manual_sync 重建部位/損益/目標賣價 + 補 部位/實際損益/股票交易 名稱
+                   (完全不碰追蹤清單)
+      - watchlist:只補 追蹤清單 名稱(不 manual_sync、不碰部位)
+      - all:兩邊都做
+    """
+    do_pos = scope in ("all", "positions")
+    do_wl = scope in ("all", "watchlist")
     name_cache: dict[str, str] = {}
-    n_wl = n_pos = n_realized = 0
+    n_wl = n_pos = n_realized = n_trades = 0
 
-    # 1) 先補追蹤清單名稱
-    try:
-        for w in (sheets.load_watchlist() or []):
-            if w.get("_error"):
-                continue
-            sym = str(w.get("symbol") or w.get("代號") or "").strip()
-            cur = str(w.get("name") or w.get("名稱") or "").strip()
-            if not sym or cur:
-                continue
-            nm = name_cache.get(sym) or _lookup_stock_name(sym)
-            if not nm:
-                continue
-            name_cache[sym] = nm
-            if sheets_writer.upsert_watchlist_item(
-                    symbol=sym, 代號=sym, name=nm, 名稱=nm).get("ok"):
-                n_wl += 1
-    except Exception as e:
-        print(f"⚠️ 補追蹤清單名稱失敗: {e}", flush=True)
+    # 1) 補追蹤清單名稱(只有 watchlist / all 才做)
+    if do_wl:
+        try:
+            for w in (sheets.load_watchlist() or []):
+                if w.get("_error"):
+                    continue
+                sym = str(w.get("symbol") or w.get("代號") or "").strip()
+                cur = str(w.get("name") or w.get("名稱") or "").strip()
+                if not sym or cur:
+                    continue
+                nm = name_cache.get(sym) or _lookup_stock_name(sym)
+                if not nm:
+                    continue
+                name_cache[sym] = nm
+                if sheets_writer.upsert_watchlist_item(
+                        symbol=sym, 代號=sym, name=nm, 名稱=nm).get("ok"):
+                    n_wl += 1
+        except Exception as e:
+            print(f"⚠️ 補追蹤清單名稱失敗: {e}", flush=True)
+
+    # 只跑追蹤清單 → 到這就結束,完全不碰部位
+    if not do_pos:
+        return {"ok": True, "watchlist": n_wl, "positions": 0,
+                "realized": 0, "trades": 0}
 
     # 2) manual_sync — 重建部位 / 損益 / 實際損益 / 目標賣價公式
     sync = sheets_writer.manual_sync(timeout=120)
