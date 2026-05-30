@@ -2838,6 +2838,30 @@ JSON 格式(每個欄位都要):
 data_date 找不到具體日期就寫今天日期。"""
 
 
+# Haiku 4.5 估價(美金/token,粗估,實際以帳單為準)
+_PRICE_IN = 1.0 / 1_000_000
+_PRICE_OUT = 5.0 / 1_000_000
+_PRICE_CACHE_READ = 0.1 / 1_000_000
+_PRICE_WEB_SEARCH = 0.01    # 每次搜尋
+
+
+def _estimate_call_cost(resp) -> float:
+    """從 resp.usage 粗估這一筆 API call 花了多少美金(含 web_search 次數)。"""
+    try:
+        u = resp.usage
+        c = 0.0
+        c += (getattr(u, "input_tokens", 0) or 0) * _PRICE_IN
+        c += (getattr(u, "output_tokens", 0) or 0) * _PRICE_OUT
+        c += (getattr(u, "cache_read_input_tokens", 0) or 0) * _PRICE_CACHE_READ
+        c += (getattr(u, "cache_creation_input_tokens", 0) or 0) * _PRICE_IN
+        stu = getattr(u, "server_tool_use", None)
+        if stu is not None:
+            c += (getattr(stu, "web_search_requests", 0) or 0) * _PRICE_WEB_SEARCH
+        return c
+    except Exception:
+        return 0.0
+
+
 def _fetch_fundamentals(sym: str, name: str) -> dict:
     """用 Anthropic API + web_search 抓基本面 5 項 + 計算分數。
     沒設 ANTHROPIC_API_KEY 或失敗時回 ok=False。
@@ -2890,9 +2914,8 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
                     "text": _FUNDAMENTALS_SYSTEM_PROMPT,
                     "cache_control": {"type": "ephemeral"},
                 }],
-                # Tier 2 token 夠用 → web_search 查 4 次,基本面查得更深。
-                # (撞 429 仍有耐心重試保底;Tier 1 想省 token 可改回 2)
-                tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 4}],
+                # 省錢:web_search 查 2 次(每檔搜尋費砍半,5 項基本面通常還是查得到)
+                tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}],
                 messages=[{"role": "user", "content": user_msg}],
             )
             break
@@ -2963,6 +2986,7 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
             "revenue_score":       _safe_int(data.get("revenue_score")),
             "institutional_score": _safe_int(data.get("institutional_score")),
             "news_score":          _safe_int(data.get("news_score")),
+            "cost_usd":            _estimate_call_cost(resp),
         })
     except Exception as e:
         print(f"⚠️ _fetch_fundamentals 例外 sym={sym}: {type(e).__name__}: {e}",
@@ -3533,6 +3557,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                     "公司面燈號":      company_light,
                     "基本面整理時間":   organized_at,
                     "基本面資料時間":   fd.get("data_date", ""),
+                    "本次花費":         f"${fd.get('cost_usd', 0):.4f}",
                 }
             else:
                 err_short = str(fd.get("error", "未知錯誤"))[:300]
@@ -3683,6 +3708,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                     "公司面燈號":      company_light,
                     "基本面整理時間":   organized_at,
                     "基本面資料時間":   fd.get("data_date", ""),
+                    "本次花費":         f"${fd.get('cost_usd', 0):.4f}",
                 }
             else:
                 err_short = str(fd.get("error", "未知錯誤"))[:300]

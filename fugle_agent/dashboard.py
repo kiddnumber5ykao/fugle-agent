@@ -154,7 +154,7 @@ def _pill_kind(advice: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-def render(trigger_workflow, job_indicator, mark_job_started) -> None:
+def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None) -> None:
     st.markdown("""<style>
     .gyh-card div[data-testid="stExpander"]{border:0.5px solid rgba(127,127,127,.2);border-radius:12px;margin-bottom:8px}
     </style>""", unsafe_allow_html=True)
@@ -174,26 +174,29 @@ def render(trigger_workflow, job_indicator, mark_job_started) -> None:
     intra_running = "🔄" in intra_ind
     # 全更新跑的時候,盤中更新也一起鎖(它們會互相覆寫)
     any_running = full_running or intra_running
+    # 只更新「你現在看的」那一邊:持有→positions、追蹤→watchlist
+    _scope = "positions" if mode == "持有" else "watchlist"
+    _scope_zh = "股票部位" if mode == "持有" else "追蹤清單"
     b1, b2 = st.columns(2)
     with b1:
         if st.button(f"🔄 全更新{full_ind}",
                      use_container_width=True, disabled=any_running,
-                     help="重算交易 → 技術面 → 基本面 → 重算我該做啥(全部,慢,一天一次或想完整檢討時按)"):
-            r = trigger_workflow("full_update.yml")
+                     help=f"只更新「{_scope_zh}」:重算交易 → 技術面 → 基本面 → 我該做啥(慢)"):
+            r = trigger_workflow("full_update.yml", inputs={"scope": _scope})
             if r.get("ok"):
                 mark_job_started("full_update", 900)
-                st.success("✅ 全更新已觸發(背景跑,約幾分鐘)")
+                st.success(f"✅ 全更新已觸發(只跑{_scope_zh},背景跑)")
                 st.rerun()
             else:
                 st.error(f"❌ {r.get('error')}")
     with b2:
         if st.button(f"⚡ 盤中更新{intra_ind}",
                      use_container_width=True, disabled=any_running,
-                     help="重算交易 → 技術面 → 重算我該做啥(跳過基本面,快)"):
-            r = trigger_workflow("intraday_update.yml")
+                     help=f"只更新「{_scope_zh}」:重算交易 → 技術面 → 我該做啥(跳過基本面,快)"):
+            r = trigger_workflow("intraday_update.yml", inputs={"scope": _scope})
             if r.get("ok"):
                 mark_job_started("intraday_update", 180)
-                st.success("✅ 盤中更新已觸發(背景跑,約 1 分鐘)")
+                st.success(f"✅ 盤中更新已觸發(只跑{_scope_zh},背景跑)")
                 st.rerun()
             else:
                 st.error(f"❌ {r.get('error')}")
@@ -205,16 +208,30 @@ def render(trigger_workflow, job_indicator, mark_job_started) -> None:
     else:
         _render_watchlist()
 
+    # ── 更多(收起來)──
+    with st.expander("⚙️ 更多"):
+        if st.button("🔁 重新整理", use_container_width=True):
+            st.rerun()
+        if cancel_all and st.button("🛑 終止跑中的更新", use_container_width=True):
+            res = cancel_all()
+            if res.get("ok"):
+                n = res.get("n_cancelled", 0)
+                st.success(f"✅ 已取消 {n} 個" if n else "沒有跑中的")
+            else:
+                st.error(f"❌ {res.get('error')}")
+            st.rerun()
+
 
 def _last_update_caption(rows: list[dict]) -> None:
-    tech = max((_g(r, "技術整理時間") for r in rows), default="")
-    fund = max((_g(r, "基本面整理時間") for r in rows), default="")
-    tt, ts = _rel_time(tech, 30)
-    ft, fs = _rel_time(fund, 60 * 24 * 3)
+    # 顯示「資料時間」(資料本身是哪天的),不是「整理時間」(我幾點跑分析)
+    tech = max((_g(r, "技術資料時間") for r in rows), default="")
+    fund = max((_g(r, "基本面資料時間") for r in rows), default="")
+    tt, ts = _rel_time(tech, 60 * 24 * 2)      # 技術資料 > 2 天才提醒
+    ft, fs = _rel_time(fund, 60 * 24 * 5)       # 基本面資料 > 5 天才提醒
     warn = ""
     if ts:
-        warn += "　⚠️ 技術面有點久了"
-    st.caption(f"更新於 — 技術面 {tt} · 基本面 {ft}{warn}")
+        warn += "　⚠️ 技術資料有點舊"
+    st.caption(f"資料時間 — 技術 {tt} · 基本面 {ft}{warn}")
 
 
 def _render_holdings() -> None:
@@ -358,7 +375,7 @@ def _detail_common(r: dict, adv: str) -> None:
     tech_lines = [(k, _g(r, k)) for k in
                   ("最新表現", "最近3天", "這週氛圍", "近10天走勢", "量能變化", "離20天高低")]
     tech_lines = [(k, v) for k, v in tech_lines if v]
-    tt, ts = _rel_time(_g(r, "技術整理時間"), 30)
+    tt, ts = _rel_time(_g(r, "技術資料時間"), 60 * 24 * 2)
     if tech_lines:
         body = "".join(f'<div style="display:flex;justify-content:space-between;font-size:13px;'
                        f'padding:2px 0"><span style="color:#5F5E5A">{k}</span><span>{v}</span></div>'
@@ -370,7 +387,7 @@ def _detail_common(r: dict, adv: str) -> None:
     fund_lines = [(k, _g(r, k)) for k in
                   ("估值", "配息", "營收動能", "法人籌碼", "近期新聞重點")]
     fund_lines = [(k, v) for k, v in fund_lines if v]
-    ft, fs = _rel_time(_g(r, "基本面整理時間"), 60 * 24 * 3)
+    ft, fs = _rel_time(_g(r, "基本面資料時間"), 60 * 24 * 5)
     if fund_lines:
         body = "".join(f'<div style="display:flex;justify-content:space-between;font-size:13px;'
                        f'padding:2px 0"><span style="color:#5F5E5A">{k}</span><span>{v}</span></div>'
@@ -378,6 +395,10 @@ def _detail_common(r: dict, adv: str) -> None:
         st.markdown(f'<div style="margin-top:8px"><b style="font-size:13px">基本面</b>'
                     f' <span style="color:{"#A32D2D" if fs else "#5F5E5A"};font-size:12px">· {ft}'
                     f'{" ⚠️久" if fs else ""}</span>{body}</div>', unsafe_allow_html=True)
+    # 本次花費(基本面 API 成本)
+    cost = _g(r, "本次花費")
+    if cost:
+        st.caption(f"💰 本檔基本面花費 {cost}(估)")
 
 
 def _realized_total() -> float:
