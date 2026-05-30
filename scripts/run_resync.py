@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# 📅 最後更新:2026-05-29(4 步補名稱含實際損益)
 """GitHub Actions 排程入口 — 重算交易 + 補名稱。
 
 對應 Streamlit 上的「📋 重算交易+補名稱」按鈕。
