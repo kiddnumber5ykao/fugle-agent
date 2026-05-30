@@ -1,3 +1,4 @@
+# 📅 最後更新:2026-05-29(對話唯讀過濾寫入工具)
 """Anthropic-powered agent — uses the `anthropic` Python SDK directly.
 
 Two entry points:

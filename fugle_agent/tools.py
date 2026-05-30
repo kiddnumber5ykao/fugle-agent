@@ -1,3 +1,4 @@
+# 📅 最後更新:2026-05-29(我該做啥 + 資料不足燈 + resync 一條龍)
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -3209,24 +3210,134 @@ _ACTION_WATCH = {
 def _what_to_do(short_light: str, super_short_light: str,
                 chips_light: str, company_light: str,
                 is_position: bool) -> str:
-    """根據 4 個燈號給「我該做啥?」— 固定對應 6 動作 + []白話原因。
+    """根據 4 個燈號給「我該做啥」— 固定對應 6 動作 + []白話原因。
     持有中:趕快再買 / 趕快賣 / 再等等買 / 再等等賣
     沒持有:趕快買 / 不要買 / 再等等買
     """
     t = _tech_tier(short_light, super_short_light)
     f = _fund_tier(chips_light, company_light)
-    # 技術 + 基本面都查不到 → 直接講清楚
+    _lean = {"🟢": "偏多", "🟡": "中性", "🔴": "偏空"}
+    # 技術 + 基本面都還沒分析 → 直接講清楚
     if t == "⚪" and f == "⚪":
-        return "⚪ 資料不足、先別動[技術跟基本面都查不到,建議自己查或重跑]"
-    # 只有單面⚪ → 當 🟡 看(中性)再查表
-    if t == "⚪":
-        t = "🟡"
+        return "⚪ 資料不足、先別動[技術跟基本面都還沒分析,先跑分析或自己查]"
+    # 只有單面有資料 → **不給確定買賣**,明講還在等另一面分析(避免假裝兩面都看過)
     if f == "⚪":
-        f = "🟡"
+        return (f"⏳ 等基本面[技術{_lean[t]},但基本面還沒分析,"
+                f"先跑「基本面」再決定買賣]")
+    if t == "⚪":
+        return (f"⏳ 等技術[基本面{_lean[f]},但技術還沒分析,"
+                f"先跑「技術面」再決定買賣]")
+    # 兩面都有資料 → 查 6 動作表
     table = _ACTION_HELD if is_position else _ACTION_WATCH
     action, reason = table.get((t, f), ("再等等" + ("賣" if is_position else "買"),
                                         "訊號不明、再等等"))
     return f"{action}[{reason}]"
+
+
+def resync_and_fill_names() -> dict:
+    """重算交易(manual_sync 重建部位/損益/目標賣價公式)+ 補空白名稱。
+    順序:先補追蹤清單名稱 → manual_sync → 補部位名稱 → 直接補實際損益名稱。
+    (先補追蹤清單名稱,manual_sync 重建實際損益時連賣光的股票也查得到名稱)"""
+    name_cache: dict[str, str] = {}
+    n_wl = n_pos = n_realized = 0
+
+    # 1) 先補追蹤清單名稱
+    try:
+        for w in (sheets.load_watchlist() or []):
+            if w.get("_error"):
+                continue
+            sym = str(w.get("symbol") or w.get("代號") or "").strip()
+            cur = str(w.get("name") or w.get("名稱") or "").strip()
+            if not sym or cur:
+                continue
+            nm = name_cache.get(sym) or _lookup_stock_name(sym)
+            if not nm:
+                continue
+            name_cache[sym] = nm
+            if sheets_writer.upsert_watchlist_item(
+                    symbol=sym, 代號=sym, name=nm, 名稱=nm).get("ok"):
+                n_wl += 1
+    except Exception as e:
+        print(f"⚠️ 補追蹤清單名稱失敗: {e}", flush=True)
+
+    # 2) manual_sync — 重建部位 / 損益 / 實際損益 / 目標賣價公式
+    sync = sheets_writer.manual_sync(timeout=120)
+    if not sync.get("ok"):
+        return {"ok": False, "error": f"manual_sync 失敗: {sync.get('error')}"}
+
+    # 3) 補部位名稱
+    try:
+        for p in (sheets.load_positions() or []):
+            if p.get("_error"):
+                continue
+            sym = str(p.get("symbol") or "").strip()
+            cur = str(p.get("name") or "").strip()
+            if not sym or cur:
+                continue
+            nm = name_cache.get(sym) or _lookup_stock_name(sym)
+            if not nm:
+                continue
+            name_cache[sym] = nm
+            if sheets_writer.upsert_position(
+                    symbol=sym, 代號=sym, name=nm, 名稱=nm).get("ok"):
+                n_pos += 1
+    except Exception as e:
+        print(f"⚠️ 補部位名稱失敗: {e}", flush=True)
+
+    # 4) 直接補實際損益名稱(獨立,不依賴部位 / 追蹤清單)
+    try:
+        need: dict[str, str] = {}
+        for r in (sheets.fetch_tab("實際損益") or []):
+            if r.get("_error"):
+                continue
+            sym = str(r.get("symbol") or r.get("代號") or "").strip()
+            nm0 = str(r.get("name") or r.get("名稱") or "").strip()
+            if sym and not nm0 and sym not in need:
+                looked = name_cache.get(sym) or _lookup_stock_name(sym)
+                if looked:
+                    need[sym] = looked
+        if need:
+            wb = sheets_writer.backfill_realized_names(need)
+            n_realized = wb.get("filled", 0) if wb.get("ok") else 0
+    except Exception as e:
+        print(f"⚠️ 補實際損益名稱失敗: {e}", flush=True)
+
+    return {"ok": True, "watchlist": n_wl, "positions": n_pos,
+            "realized": n_realized}
+
+
+def _recompute_advice(scope: str = "all") -> dict:
+    """【獨立最後一步】讀齊 Sheet 上 4 個燈號,重算「我該做啥」寫回。
+    技術面 / 基本面分析各自只寫自己的燈號,這一步才把它們合成最終結論 —
+    所以「我該做啥」永遠是「技術+基本面都到齊」之後才定稿。
+    scope: 'all' / 'positions' / 'watchlist'。回傳寫了幾筆。"""
+    do_pos = scope in ("all", "positions")
+    do_wl = scope in ("all", "watchlist")
+    n_pos = n_wl = 0
+
+    if do_pos:
+        for sym, lg in _build_existing_lights_map("positions").items():
+            advice = _what_to_do(lg.get("short", ""), lg.get("super_short", ""),
+                                 lg.get("chips", ""), lg.get("company", ""),
+                                 is_position=True)
+            wb = sheets_writer.upsert_position(
+                symbol=sym, 代號=sym,
+                **{"我該做啥": advice, "綜合建議": advice})
+            if wb.get("ok"):
+                n_pos += 1
+
+    if do_wl:
+        for sym, lg in _build_existing_lights_map("watchlist").items():
+            advice = _what_to_do(lg.get("short", ""), lg.get("super_short", ""),
+                                 lg.get("chips", ""), lg.get("company", ""),
+                                 is_position=False)
+            wb = sheets_writer.upsert_watchlist_item(
+                symbol=sym, 代號=sym,
+                **{"我該做啥": advice, "綜合建議": advice})
+            if wb.get("ok"):
+                n_wl += 1
+
+    return {"positions": n_pos, "watchlist": n_wl}
 
 
 def _build_existing_lights_map(source: str) -> dict[str, dict]:
@@ -3404,15 +3515,15 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
             chips_light = prev.get("chips", "")
             company_light = prev.get("company", "")
 
+        # 「我該做啥」不在這裡寫 — 改由最後獨立的 _recompute_advice 讀齊 4 燈才算,
+        # 確保它永遠是「技術+基本面都到齊」之後才定稿(本步只負責寫技術/基本面燈)。
         advice = _what_to_do(short_light, super_light, chips_light, company_light,
-                              is_position=True)
+                              is_position=True)   # 只給本次回覆摘要用,不寫 Sheet
         payload = {
             "symbol": sym, "代號": sym,
             "name":   name, "名稱": name,
             **tech_payload,
             **fund_payload,
-            "我該做啥?": advice,   # 新欄位名
-            "綜合建議":  advice,   # 舊欄位名也寫,向後相容(哪個 header 存在就填哪個)
         }
         wb = sheets_writer.upsert_position(**payload)
         if wb.get("ok"):
@@ -3554,15 +3665,14 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
             chips_light = prev.get("chips", "")
             company_light = prev.get("company", "")
 
+        # 「我該做啥」改由最後獨立的 _recompute_advice 算(讀齊 4 燈才定稿)
         advice = _what_to_do(short_light, super_light, chips_light, company_light,
-                              is_position=False)
+                              is_position=False)   # 只給本次回覆摘要用,不寫 Sheet
         payload = {
             "symbol": sym, "代號": sym,
             "name":   name, "名稱": name,
             **tech_payload,
             **fund_payload,
-            "我該做啥?": advice,   # 新欄位名
-            "綜合建議":  advice,   # 舊欄位名也寫,向後相容
         }
         wb = sheets_writer.upsert_watchlist_item(**payload)
         if wb.get("ok"):
@@ -3790,7 +3900,7 @@ async def what_to_do_now(args: dict) -> dict:
             if not sym:
                 continue
             short = _light(p.get("短線燈號") or p.get("short_light"))
-            advice = str(p.get("綜合建議") or "").strip()
+            advice = str(p.get("我該做啥") or p.get("綜合建議") or "").strip()
             name = str(p.get("name") or p.get("名稱") or "").strip()
             entry = {"symbol": sym, "name": name, "advice": advice,
                      "pnl_pct": p.get("損益%") or p.get("pnl_pct")}
@@ -3806,7 +3916,7 @@ async def what_to_do_now(args: dict) -> dict:
             if not sym:
                 continue
             short = _light(w.get("短線燈號"))
-            advice = str(w.get("綜合建議") or "").strip()
+            advice = str(w.get("我該做啥") or w.get("綜合建議") or "").strip()
             name = str(w.get("name") or w.get("名稱") or "").strip()
             entry = {"symbol": sym, "name": name, "advice": advice}
             if short == "🟢":
