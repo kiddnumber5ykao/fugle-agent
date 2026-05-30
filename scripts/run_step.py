@@ -25,18 +25,22 @@ if str(_REPO_ROOT) not in sys.path:
 
 def main() -> None:
     step = (sys.argv[1] if len(sys.argv) > 1 else "").lower().strip()
+    scope = (sys.argv[2] if len(sys.argv) > 2 else "all").lower().strip()
     if step not in ("resync", "technical", "fundamental", "recompute"):
         print(f"❌ 不認識的步驟: {step!r}")
         sys.exit(2)
+    if scope not in ("all", "positions", "watchlist"):
+        scope = "all"
 
     os.environ.setdefault("FUGLE_MOCK", "0")
     from fugle_agent.tools import (resync_and_fill_names, organize_all_technical,
                                    organize_all_deep, _recompute_advice)
 
     t0 = datetime.datetime.now()
-    print(f"▶️  步驟 {step} 開始 @ {t0.isoformat(timespec='seconds')}")
+    print(f"▶️  步驟 {step}/{scope} 開始 @ {t0.isoformat(timespec='seconds')}")
 
     if step == "resync":
+        # 重算一律全做(從交易表重建部位、補名稱),很便宜
         r = resync_and_fill_names()
         if not r.get("ok"):
             print(f"❌ 重算交易失敗: {r.get('error')}")
@@ -44,11 +48,11 @@ def main() -> None:
         print(f"   ✅ 補名稱:追蹤 {r.get('watchlist')} / 部位 {r.get('positions')} / "
               f"實際損益 {r.get('realized')}")
     elif step == "technical":
-        asyncio.run(organize_all_technical.handler({"scope": "all"}))
+        asyncio.run(organize_all_technical.handler({"scope": scope}))
     elif step == "fundamental":
-        asyncio.run(organize_all_deep.handler({"scope": "all"}))
+        asyncio.run(organize_all_deep.handler({"scope": scope}))
     elif step == "recompute":
-        adv = _recompute_advice("all")
+        adv = _recompute_advice(scope)
         print(f"   🧭 部位 {adv.get('positions')} / 追蹤 {adv.get('watchlist')}")
 
     dt = (datetime.datetime.now() - t0).total_seconds()
