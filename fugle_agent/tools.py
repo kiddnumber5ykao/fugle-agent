@@ -2565,7 +2565,25 @@ def _compute_short_signals(sym: str) -> dict:
             current_source = "candles[-1]"
             current_date_assumed = str(bars[-1].get("date", "")).strip()[:10]
 
-        # 計算今日表現:current (今日) vs prev_close (昨日)
+        # 🌟 校正比較基準:讓「最新表現」永遠是「最近一個交易日的真實漲跌」。
+        # 假日/盤後 Fugle 沒給今天新價時,不會因為 current==最後一根收盤 而變「沒漲沒跌」,
+        # 改成用「最後一個交易日收盤 vs 前一個交易日收盤」。
+        _last_close = closes[-1]
+        _last_date = str(bars[-1].get("date", "")).strip()[:10]
+        if current_date_assumed == today_str and abs(current - _last_close) > 0.001:
+            # 真的有今天盤中新價 → 跟最後一根(昨收)比
+            prev_close = _last_close
+            prev_date = _last_date
+        else:
+            # 沒有今天的新價(假日/盤後)→ 用最後一根收盤,跟前一根比
+            current = _last_close
+            current_source += "+用收盤"
+            current_date_assumed = _last_date
+            prev_close = closes[-2] if len(closes) >= 2 else _last_close
+            prev_date = (str(bars[-2].get("date", "")).strip()[:10]
+                         if len(bars) >= 2 else "")
+
+        # 計算最近一個交易日表現:current vs prev_close
         today_change_pct = ((current / prev_close - 1) * 100 if prev_close else 0)
         latest_date = current_date_assumed
         today_vol = volumes[-1] if volumes else 0
@@ -3302,8 +3320,28 @@ def resync_and_fill_names() -> dict:
     except Exception as e:
         print(f"⚠️ 補實際損益名稱失敗: {e}", flush=True)
 
+    # 5) 補「股票交易」名稱(交易表本身名稱留空也幫補)
+    n_trades = 0
+    try:
+        trades_tab = os.getenv("PORTFOLIO_TRADES_TAB", "股票交易")
+        need_t: dict[str, str] = {}
+        for r in (sheets.fetch_tab(trades_tab) or []):
+            if r.get("_error"):
+                continue
+            sym = str(r.get("symbol") or r.get("代號") or "").strip()
+            nm0 = str(r.get("name") or r.get("名稱") or "").strip()
+            if sym and not nm0 and sym not in need_t:
+                looked = name_cache.get(sym) or _lookup_stock_name(sym)
+                if looked:
+                    need_t[sym] = looked
+        if need_t:
+            wb = sheets_writer.backfill_trade_names(need_t)
+            n_trades = wb.get("filled", 0) if wb.get("ok") else 0
+    except Exception as e:
+        print(f"⚠️ 補股票交易名稱失敗: {e}", flush=True)
+
     return {"ok": True, "watchlist": n_wl, "positions": n_pos,
-            "realized": n_realized}
+            "realized": n_realized, "trades": n_trades}
 
 
 def _recompute_advice(scope: str = "all") -> dict:

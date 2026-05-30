@@ -167,11 +167,17 @@ def render(trigger_workflow, job_indicator, mark_job_started) -> None:
         mode = st.radio("檢視", ["持有", "追蹤"], horizontal=True,
                         label_visibility="collapsed", key="dash_mode")
 
-    # ── 全更新 / 盤中更新 ──
+    # ── 全更新 / 盤中更新 ──(跑中時禁用,避免重複按)
+    full_ind = job_indicator("full_update")
+    intra_ind = job_indicator("intraday_update")
+    full_running = "🔄" in full_ind
+    intra_running = "🔄" in intra_ind
+    # 全更新跑的時候,盤中更新也一起鎖(它們會互相覆寫)
+    any_running = full_running or intra_running
     b1, b2 = st.columns(2)
     with b1:
-        if st.button(f"🔄 全更新{job_indicator('full_update')}",
-                     use_container_width=True,
+        if st.button(f"🔄 全更新{full_ind}",
+                     use_container_width=True, disabled=any_running,
                      help="重算交易 → 技術面 → 基本面 → 重算我該做啥(全部,慢,一天一次或想完整檢討時按)"):
             r = trigger_workflow("full_update.yml")
             if r.get("ok"):
@@ -181,8 +187,8 @@ def render(trigger_workflow, job_indicator, mark_job_started) -> None:
             else:
                 st.error(f"❌ {r.get('error')}")
     with b2:
-        if st.button(f"⚡ 盤中更新{job_indicator('intraday_update')}",
-                     use_container_width=True,
+        if st.button(f"⚡ 盤中更新{intra_ind}",
+                     use_container_width=True, disabled=any_running,
                      help="重算交易 → 技術面 → 重算我該做啥(跳過基本面,快)"):
             r = trigger_workflow("intraday_update.yml")
             if r.get("ok"):
@@ -191,6 +197,8 @@ def render(trigger_workflow, job_indicator, mark_job_started) -> None:
                 st.rerun()
             else:
                 st.error(f"❌ {r.get('error')}")
+    if any_running:
+        st.caption("⏳ 更新跑中…跑完前按鈕會鎖住,避免重複觸發(可到 sidebar 終止)")
 
     if mode == "持有":
         _render_holdings()
