@@ -3144,6 +3144,91 @@ def _combined_advice(short_light: str, super_short_light: str,
     return matrix.get((tech_key, fund_key), "🟡 訊號不明、再等等")
 
 
+def _light_emoji(light: str) -> str:
+    """把任何燈號字串收斂成單一 emoji:⚪(資料不足)/🟢/🟡/🔴。"""
+    if "⚪" in light or "資料不足" in light:
+        return "⚪"
+    if "🟢" in light:
+        return "🟢"
+    if "🔴" in light:
+        return "🔴"
+    if "🟡" in light:
+        return "🟡"
+    return "⚪"   # 空白也當資料不足
+
+
+def _tech_tier(short_light: str, super_short_light: str) -> str:
+    """技術面整體 = 短線 + 超短線:都🟢→🟢、都🔴→🔴、都⚪→⚪、其他→🟡。"""
+    s, ss = _light_emoji(short_light), _light_emoji(super_short_light)
+    if s == "⚪" and ss == "⚪":
+        return "⚪"
+    if s == "🟢" and ss == "🟢":
+        return "🟢"
+    if s == "🔴" and ss == "🔴":
+        return "🔴"
+    return "🟡"
+
+
+def _fund_tier(chips_light: str, company_light: str) -> str:
+    """基本面整體 = 籌碼 + 公司:都🟢→🟢、都🔴→🔴、都⚪→⚪、其他→🟡。"""
+    c, co = _light_emoji(chips_light), _light_emoji(company_light)
+    if c == "⚪" and co == "⚪":
+        return "⚪"
+    if c == "🟢" and co == "🟢":
+        return "🟢"
+    if c == "🔴" and co == "🔴":
+        return "🔴"
+    return "🟡"
+
+
+# (技術面, 基本面) → (動作, 白話原因)。⚪ 在查表時當 🟡 看(除非兩面都⚪)。
+_ACTION_HELD = {
+    ("🟢", "🟢"): ("趕快再買", "短長線都強,可加碼"),
+    ("🟢", "🟡"): ("趕快再買", "技術強、基本面中性,可續抱或小加"),
+    ("🟢", "🔴"): ("趕快賣",   "技術衝高但基本面差,趁高出場別貪"),
+    ("🟡", "🟢"): ("再等等買", "基本面好,等技術轉強再加碼"),
+    ("🟡", "🟡"): ("再等等賣", "沒明顯方向,先抱著觀察"),
+    ("🟡", "🔴"): ("趕快賣",   "基本面差、技術沒撐,沒理由抱"),
+    ("🔴", "🟢"): ("再等等賣", "技術轉弱但基本面好,觀察止跌"),
+    ("🔴", "🟡"): ("趕快賣",   "技術走弱、基本面普通,考慮停損停利"),
+    ("🔴", "🔴"): ("趕快賣",   "雙弱沒戲,盡快出場"),
+}
+_ACTION_WATCH = {
+    ("🟢", "🟢"): ("趕快買",   "短長線都看好,可考慮進場"),
+    ("🟢", "🟡"): ("趕快買",   "技術強,短打可進、別久抱"),
+    ("🟢", "🔴"): ("不要買",   "基本面差的不碰,技術再強也別追"),
+    ("🟡", "🟢"): ("再等等買", "基本面好,等技術轉強再進"),
+    ("🟡", "🟡"): ("再等等買", "沒明顯訊號,再等等"),
+    ("🟡", "🔴"): ("不要買",   "基本面差,不值得進"),
+    ("🔴", "🟢"): ("不要買",   "技術弱,等止跌再說"),
+    ("🔴", "🟡"): ("不要買",   "技術弱,不用進"),
+    ("🔴", "🔴"): ("不要買",   "雙弱,不用進"),
+}
+
+
+def _what_to_do(short_light: str, super_short_light: str,
+                chips_light: str, company_light: str,
+                is_position: bool) -> str:
+    """根據 4 個燈號給「我該做啥?」— 固定對應 6 動作 + []白話原因。
+    持有中:趕快再買 / 趕快賣 / 再等等買 / 再等等賣
+    沒持有:趕快買 / 不要買 / 再等等買
+    """
+    t = _tech_tier(short_light, super_short_light)
+    f = _fund_tier(chips_light, company_light)
+    # 技術 + 基本面都查不到 → 直接講清楚
+    if t == "⚪" and f == "⚪":
+        return "⚪ 資料不足、先別動[技術跟基本面都查不到,建議自己查或重跑]"
+    # 只有單面⚪ → 當 🟡 看(中性)再查表
+    if t == "⚪":
+        t = "🟡"
+    if f == "⚪":
+        f = "🟡"
+    table = _ACTION_HELD if is_position else _ACTION_WATCH
+    action, reason = table.get((t, f), ("再等等" + ("賣" if is_position else "買"),
+                                        "訊號不明、再等等"))
+    return f"{action}[{reason}]"
+
+
 def _build_existing_lights_map(source: str) -> dict[str, dict]:
     """從 Sheet 讀現有的 4 個燈號 — 用於「只跑一邊時讓綜合建議仍能算對」。
     source = 'positions' 或 'watchlist'。"""
@@ -3319,14 +3404,15 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
             chips_light = prev.get("chips", "")
             company_light = prev.get("company", "")
 
-        advice = _combined_advice(short_light, super_light, chips_light, company_light,
-                                   is_position=True)
+        advice = _what_to_do(short_light, super_light, chips_light, company_light,
+                              is_position=True)
         payload = {
             "symbol": sym, "代號": sym,
             "name":   name, "名稱": name,
             **tech_payload,
             **fund_payload,
-            "綜合建議": advice,
+            "我該做啥?": advice,   # 新欄位名
+            "綜合建議":  advice,   # 舊欄位名也寫,向後相容(哪個 header 存在就填哪個)
         }
         wb = sheets_writer.upsert_position(**payload)
         if wb.get("ok"):
@@ -3468,14 +3554,15 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
             chips_light = prev.get("chips", "")
             company_light = prev.get("company", "")
 
-        advice = _combined_advice(short_light, super_light, chips_light, company_light,
-                                   is_position=False)
+        advice = _what_to_do(short_light, super_light, chips_light, company_light,
+                              is_position=False)
         payload = {
             "symbol": sym, "代號": sym,
             "name":   name, "名稱": name,
             **tech_payload,
             **fund_payload,
-            "綜合建議": advice,
+            "我該做啥?": advice,   # 新欄位名
+            "綜合建議":  advice,   # 舊欄位名也寫,向後相容
         }
         wb = sheets_writer.upsert_watchlist_item(**payload)
         if wb.get("ok"):
