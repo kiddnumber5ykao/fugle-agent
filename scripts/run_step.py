@@ -40,8 +40,8 @@ def main() -> None:
     print(f"▶️  步驟 {step}/{scope} 開始 @ {t0.isoformat(timespec='seconds')}")
 
     if step == "resync":
-        # 重算一律全做(從交易表重建部位、補名稱),很便宜
-        r = resync_and_fill_names()
+        # 依 scope 只動該動的分頁(positions 不碰追蹤清單,反之亦然)
+        r = resync_and_fill_names(scope)
         if not r.get("ok"):
             print(f"❌ 重算交易失敗: {r.get('error')}")
             sys.exit(3)
