@@ -509,148 +509,8 @@ def _new_watchlist_symbols() -> list[str]:
 # ---------------------------------------------------------------------------
 # Sidebar — 分析按鈕 + 狀態列 + 對話控制
 # ---------------------------------------------------------------------------
-with st.sidebar:
-    st.subheader("🚀 一鍵分析")
-    st.caption("**📈 技術分析**(約 1-2 分鐘)")
-    _tc1, _tc2 = st.columns(2)
-    with _tc1:
-        _label = f"部位{_job_indicator('tech_pos')}"
-        if st.button(_label, key="btn_tech_pos", use_container_width=True):
-            res = _trigger_github_workflow("intraday_technical.yml",
-                                            inputs={"scope": "positions"})
-            if res.get("ok"):
-                _mark_job_started("tech_pos", 180)
-                st.success("✅ 部位技術分析已觸發")
-                st.rerun()
-            else:
-                st.error(f"❌ {res.get('error')}")
-    with _tc2:
-        _label = f"追蹤清單{_job_indicator('tech_wl')}"
-        if st.button(_label, key="btn_tech_wl", use_container_width=True):
-            res = _trigger_github_workflow("intraday_technical.yml",
-                                            inputs={"scope": "watchlist"})
-            if res.get("ok"):
-                _mark_job_started("tech_wl", 180)
-                st.success("✅ 追蹤清單技術分析已觸發")
-                st.rerun()
-            else:
-                st.error(f"❌ {res.get('error')}")
-
-    st.caption("**💎 深度分析**(約 5-10 分鐘)")
-    _dc1, _dc2 = st.columns(2)
-    with _dc1:
-        _label = f"部位{_job_indicator('deep_pos')}"
-        if st.button(_label, key="btn_deep_pos", use_container_width=True):
-            res = _trigger_github_workflow("daily_deep_analysis.yml",
-                                            inputs={"scope": "positions"})
-            if res.get("ok"):
-                _mark_job_started("deep_pos", 600)
-                st.success("✅ 部位深度分析已觸發")
-                st.rerun()
-            else:
-                st.error(f"❌ {res.get('error')}")
-    with _dc2:
-        _label = f"追蹤清單{_job_indicator('deep_wl')}"
-        if st.button(_label, key="btn_deep_wl", use_container_width=True):
-            res = _trigger_github_workflow("daily_deep_analysis.yml",
-                                            inputs={"scope": "watchlist"})
-            if res.get("ok"):
-                _mark_job_started("deep_wl", 600)
-                st.success("✅ 追蹤清單深度分析已觸發")
-                st.rerun()
-            else:
-                st.error(f"❌ {res.get('error')}")
-
-    _new_label = f"🆕 只跑新追蹤(技術+深度){_job_indicator('new_wl')}"
-    if st.button(_new_label, use_container_width=True,
-                  help="自動找出追蹤清單裡「技術整理時間」還空白的代號(= 你剛加、還沒分析過的),"
-                       "只對那幾檔跑技術 + 深度分析,不重跑整張清單,省時間省錢。"):
-        _new_syms = _new_watchlist_symbols()
-        if not _new_syms:
-            st.info("沒有新的追蹤清單(都分析過了)")
-        else:
-            _syms_str = ",".join(_new_syms)
-            r1 = _trigger_github_workflow("intraday_technical.yml",
-                                           inputs={"scope": "watchlist", "symbols": _syms_str})
-            r2 = _trigger_github_workflow("daily_deep_analysis.yml",
-                                           inputs={"scope": "watchlist", "symbols": _syms_str})
-            if r1.get("ok") and r2.get("ok"):
-                _mark_job_started("new_wl", 600)
-                st.success(f"✅ 已觸發 {len(_new_syms)} 檔新追蹤的技術+深度分析")
-                st.rerun()
-            else:
-                st.error(f"❌ 技術:{r1.get('error', 'ok')} / 深度:{r2.get('error', 'ok')}")
-
-    _resync_label = f"📋 重算交易+補名稱{_job_indicator('pos_resync')}"
-    if st.button(_resync_label, use_container_width=True,
-                  help="剛在股票交易加/改/刪交易後按這個 — 從交易表重算股票部位、實際損益、"
-                       "5/10/15/20% 目標賣價公式,並**幫股票部位 + 追蹤清單**補上空白的股票名稱。"
-                       "(其他 4 個分析按鈕不會補名稱,專心填技術 / 基本面欄位)"
-                       "丟到 GitHub 背景跑,不卡 UI,約 1~2 分鐘。"):
-        res = _trigger_github_workflow("resync_trades.yml")
-        if res.get("ok"):
-            _mark_job_started("pos_resync", 120)
-            st.success("✅ 重算+補名稱已觸發(在 GitHub 背景跑,可繼續聊天)")
-            st.rerun()
-        else:
-            st.error(f"❌ {res.get('error')}")
-
-    if st.button("🛑 終止所有跑中", use_container_width=True,
-                  help="把所有正在 GitHub 跑的 workflow 全部取消"):
-        with st.spinner("⏳ 取消所有跑中的 workflow…"):
-            res = _cancel_all_running_workflows()
-        if res.get("ok"):
-            n = res.get("n_cancelled", 0)
-            if n > 0:
-                st.success(f"✅ 已取消 {n} 個跑中的 workflow")
-            else:
-                st.info("沒有跑中的 workflow")
-            if res.get("errors"):
-                st.warning(f"部分錯誤:{res['errors']}")
-        else:
-            st.error(f"❌ {res.get('error')}")
-        st.rerun()
-
-    if st.button("🔁 重新整理頁面", use_container_width=True,
-                  help="重新讀 Sheet 上的最新時間戳跟資料(等於按 F5)"):
-        st.rerun()
-
-    if st.button("🧹 清除更新時間顯示", use_container_width=True,
-                  help="把上方 5 個更新時間全部清成「—」(只是隱藏顯示,不會動 Sheet 資料)。"
-                       "之後重跑各按鈕,時間才會重新出現,方便你確認哪個真的有跑。"):
-        import datetime as _dt
-        st.session_state["_time_cutoff"] = _dt.datetime.now(
-            _dt.timezone(_dt.timedelta(hours=8))).strftime("%Y-%m-%d %H:%M:%S")
-        st.rerun()
-
-    st.divider()
-    st.checkbox(
-        "✏️ 允許 AI 修改 Google Sheet",
-        key="_allow_write",
-        value=st.session_state.get("_allow_write", False),
-        help="預設關閉 = 對話只能讀 Sheet 回答你,絕對不會增刪改任何資料。\n\n"
-             "要請 AI 幫你更新 Sheet(例如丟新聞 / 股價截圖叫它記錄、加交易、加追蹤)時,"
-             "才打開這個開關,然後在對話裡講。用完建議關回去比較安全。")
-    if st.session_state.get("_allow_write"):
-        st.warning("✏️ 修改模式開著 — 對話現在**可以動到你的 Sheet**")
-    else:
-        st.caption("🔒 唯讀模式:對話只會讀資料、不會改動 Sheet")
-
-    st.divider()
-    if SETTINGS.mock:
-        st.info("🎭 Mock 模式")
-    else:
-        st.success("📡 Live 模式")
-    if st.button("🗑️ 清除對話", use_container_width=True):
-        st.session_state.display = []
-        st.session_state.history = []
-        try:
-            from fugle_agent import sheets_writer as _sw
-            _sw.clear_history()
-        except Exception:
-            pass
-        st.rerun()
-    st.caption("⚠️ 僅供示範,不構成投資建議")
+# (Sidebar 已移除 — 全更新/盤中更新在儀表板上;終止跑中放儀表板「更多」;
+#  唯讀開關 + 清除對話放對話頁。)
 
 
 # ---------------------------------------------------------------------------
@@ -661,7 +521,8 @@ if "_view" not in st.session_state:
 
 if st.session_state["_view"] == "儀表板":
     import fugle_agent.dashboard as _dash
-    _dash.render(_trigger_github_workflow, _job_indicator, _mark_job_started)
+    _dash.render(_trigger_github_workflow, _job_indicator, _mark_job_started,
+                 _cancel_all_running_workflows)
     st.divider()
     if st.button("💬 切換到對話", use_container_width=True):
         st.session_state["_view"] = "對話"
@@ -669,9 +530,29 @@ if st.session_state["_view"] == "儀表板":
     st.caption("⚠️ 僅供示範,不構成投資建議")
     st.stop()
 
-# 對話模式 — 頂部給一顆回儀表板的按鈕
+# 對話模式 — 頂部:回儀表板 + 唯讀開關 + 清除對話
 if st.button("🏠 回儀表板", use_container_width=True):
     st.session_state["_view"] = "儀表板"
+    st.rerun()
+
+st.checkbox(
+    "✏️ 允許 AI 修改 Google Sheet",
+    key="_allow_write",
+    value=st.session_state.get("_allow_write", False),
+    help="預設關閉 = 對話只能讀 Sheet 回答你,絕對不會增刪改任何資料。"
+         "要請 AI 幫你更新(丟新聞/截圖叫它記錄、加交易、加追蹤)時才打開,用完建議關回去。")
+if st.session_state.get("_allow_write"):
+    st.warning("✏️ 修改模式開著 — 對話現在**可以動到你的 Sheet**")
+else:
+    st.caption("🔒 唯讀模式:對話只會讀資料、不會改動 Sheet")
+if st.button("🗑️ 清除對話", use_container_width=True):
+    st.session_state.display = []
+    st.session_state.history = []
+    try:
+        from fugle_agent import sheets_writer as _sw
+        _sw.clear_history()
+    except Exception:
+        pass
     st.rerun()
 
 
