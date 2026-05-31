@@ -1,4 +1,4 @@
-# 📅 最後更新:2026-05-29(手機儀表板版)
+# 📅 ★最新版★ 上傳於 2026-05-31 20:54  (原最後更新 2026-05-29)(手機儀表板版)
 """Streamlit chat UI for the Fugle agent.
 
 Run locally:    streamlit run app.py
@@ -283,8 +283,10 @@ _KEY_TO_WORKFLOW = {
 
 
 @st.cache_data(ttl=15, show_spinner=False)
-def _workflow_running_count(workflow_file: str) -> int:
-    """查某個 workflow 目前還在 in_progress / queued 的 run 數量。查不到回 -1。"""
+def _workflow_running_count(workflow_file: str, scope: str | None = None) -> int:
+    """查某個 workflow 目前還在 in_progress / queued 的 run 數量。查不到回 -1。
+    scope 給了(positions/watchlist)就只算「執行名稱帶 [scope]」的 run —
+    這樣持有的更新在跑時,追蹤的按鈕不會被一起鎖住。"""
     import json as _json
     import urllib.request
 
@@ -302,14 +304,24 @@ def _workflow_running_count(workflow_file: str) -> int:
     try:
         for status in ("in_progress", "queued"):
             url = (f"https://api.github.com/repos/{repo}/actions/workflows/"
-                   f"{workflow_file}/runs?status={status}&per_page=10")
+                   f"{workflow_file}/runs?status={status}&per_page=15")
             req = urllib.request.Request(url, headers=headers, method="GET")
             with urllib.request.urlopen(req, timeout=8) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
-            total += len(data.get("workflow_runs") or [])
+            for run in (data.get("workflow_runs") or []):
+                if scope and scope != "all":
+                    title = str(run.get("display_title") or run.get("name") or "")
+                    if f"[{scope}]" not in title:
+                        continue
+                total += 1
         return total
     except Exception:
         return -1
+
+
+def _workflow_running(workflow_file: str, scope: str | None = None) -> bool:
+    """該 workflow(可指定 scope)現在是不是有 run 在跑。"""
+    return _workflow_running_count(workflow_file, scope) > 0
 
 
 def _job_indicator(key: str) -> str:
@@ -527,7 +539,7 @@ if "_view" not in st.session_state:
 if st.session_state["_view"] == "儀表板":
     import fugle_agent.dashboard as _dash
     _dash.render(_trigger_github_workflow, _job_indicator, _mark_job_started,
-                 _cancel_all_running_workflows)
+                 _cancel_all_running_workflows, _workflow_running)
     st.divider()
     if st.button("💬 切換到對話", use_container_width=True):
         st.session_state["_view"] = "對話"
