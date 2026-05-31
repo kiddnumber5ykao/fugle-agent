@@ -271,6 +271,8 @@ def _mark_job_started(key: str, est_seconds: int) -> None:
 
 # 每個按鈕對應的 GitHub workflow 檔名 — 用來查「到底跑完沒」
 _KEY_TO_WORKFLOW = {
+    "full_update":     "full_update.yml",
+    "intraday_update": "intraday_update.yml",
     "tech_pos":   "intraday_technical.yml",
     "tech_wl":    "intraday_technical.yml",
     "deep_pos":   "daily_deep_analysis.yml",
@@ -311,27 +313,30 @@ def _workflow_running_count(workflow_file: str) -> int:
 
 
 def _job_indicator(key: str) -> str:
-    """按鈕後綴指示:🔄 真的還在 GitHub 跑 / ✅ 真的跑完了。
-    去問 GitHub workflow 還在不在跑,不再用估計時間瞎猜。"""
+    """按鈕後綴指示:🔄 還在 GitHub 跑 / ✅ 剛跑完。
+    **優先看 GitHub 真實狀態**(不靠 session_state),所以重新整理頁面也擋得住重複按。"""
     import datetime as _dt
-    job = st.session_state.get("job_states", {}).get(key)
-    if not job:
-        return ""
-    now = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8)))
-    elapsed = (now - job["started"]).total_seconds()
-
     wf = _KEY_TO_WORKFLOW.get(key)
     running = _workflow_running_count(wf) if wf else -1
 
-    # 剛按下去的前 25 秒給「起跑緩衝」— GitHub 可能還沒把 run 排進 queued
-    if elapsed < 25:
-        return " 🔄"
+    # ① GitHub 確認還在跑 → 一律 🔄(重整、換裝置都擋得住)
     if running > 0:
-        return " 🔄"          # GitHub 確認還在跑
-    if running == 0:
-        return " ✅"          # GitHub 確認沒有跑中的 → 真的完成
-    # running == -1:查不到(沒設 PAT / API 出錯)→ 退回估計時間
-    return " 🔄" if elapsed < job["est_secs"] else " ✅"
+        return " 🔄"
+
+    job = st.session_state.get("job_states", {}).get(key)
+    if job:
+        now = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8)))
+        elapsed = (now - job["started"]).total_seconds()
+        # ② 剛按下去的前 25 秒給「起跑緩衝」— GitHub 可能還沒把 run 排進 queued
+        if elapsed < 25:
+            return " 🔄"
+        if running == 0:
+            return " ✅"          # GitHub 確認沒跑中 → 真的完成
+        # running == -1(沒 PAT / API 出錯)→ 退回估計時間
+        return " 🔄" if elapsed < job["est_secs"] else " ✅"
+
+    # 沒有 job 紀錄(可能 F5 過)→ GitHub 沒在跑就不顯示
+    return ""
 
 
 # ---------------------------------------------------------------------------
