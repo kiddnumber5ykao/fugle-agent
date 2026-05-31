@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 22:41  (原最後更新 2026-05-29)(手機儀表板版)
+# 📅 ★最新版★ 上傳於 2026-06-01 00:09  (原最後更新 2026-05-29)(手機儀表板版)
 """Streamlit chat UI for the Fugle agent.
 
 Run locally:    streamlit run app.py
@@ -558,16 +558,10 @@ if st.button("🏠 回儀表板", use_container_width=True):
     st.session_state["_view"] = "儀表板"
     st.rerun()
 
-st.checkbox(
-    "✏️ 允許 AI 修改 Google Sheet",
-    key="_allow_write",
-    value=st.session_state.get("_allow_write", False),
-    help="預設關閉 = 對話只能讀 Sheet 回答你,絕對不會增刪改任何資料。"
-         "要請 AI 幫你更新(丟新聞/截圖叫它記錄、加交易、加追蹤)時才打開,用完建議關回去。")
-if st.session_state.get("_allow_write"):
-    st.warning("✏️ 修改模式開著 — 對話現在**可以動到你的 Sheet**")
-else:
-    st.caption("🔒 唯讀模式:對話只會讀資料、不會改動 Sheet")
+# 對話一律唯讀 — 絕對不會動到 Google Sheet,只能讀資料回答你。
+# (要改 Sheet 一律走儀表板的按鈕 / 自己手動編輯,不經過 AI 對話)
+st.session_state["_allow_write"] = False
+st.caption("🔒 唯讀模式:對話只會讀資料回答你,絕對不會增刪改任何 Sheet 內容")
 if st.button("🗑️ 清除對話", use_container_width=True):
     st.session_state.display = []
     st.session_state.history = []
@@ -770,9 +764,9 @@ if prompt is not None or prompt_files:
         tool_log = st.container()        # tool calls go here, above the text
         text_box = st.empty()            # streaming text replacement target
         try:
-            _allow_write = bool(st.session_state.get("_allow_write", False))
+            # 對話永遠唯讀 — 寫死 read_only=True,不讀任何開關
             full_text, tools_used = _consume_turn(
-                agent_input, text_box, tool_log, read_only=not _allow_write)
+                agent_input, text_box, tool_log, read_only=True)
             text_box.markdown(full_text)
         except Exception as exc:
             # 把常見的暫時性錯誤翻成中文,避免使用者看到 traceback 嚇到
