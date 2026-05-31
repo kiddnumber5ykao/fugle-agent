@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 20:54  (原最後更新 2026-05-29)(加 backfill_realized_names)
+# 📅 ★最新版★ 上傳於 2026-05-31 22:41  (原最後更新 2026-05-29)(加 backfill_realized_names)
 """POST helper for the Apps Script Web App that writes to the user's
 '加油好嗎' Google Sheet.
 
@@ -114,6 +114,12 @@ def upsert_watchlist_item(**fields) -> dict:
 
 def delete_watchlist_item(symbol: str) -> dict:
     return _post("delete_watchlist_item", {"symbol": symbol})
+
+
+def cleanup_watchlist(timeout: int = 60) -> dict:
+    """整理追蹤清單:① 移除已持有(在股票部位裡)的;② 重複的留第一個;
+    ③ 實際損益有、但清單沒有的,補一列(追蹤理由=「曾經」)。"""
+    return _post("cleanup_watchlist", {}, timeout=timeout)
 
 
 def backfill_trade_names(names: dict[str, str], timeout: int = 60) -> dict:

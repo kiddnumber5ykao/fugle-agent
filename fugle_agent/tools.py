@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 21:45  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
+# 📅 ★最新版★ 上傳於 2026-05-31 22:41  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -3280,55 +3280,80 @@ def _fund_tier(chips_light: str, company_light: str) -> str:
     return "🟡"
 
 
-# (技術面, 基本面) → (動作, 白話原因)。⚪ 在查表時當 🟡 看(除非兩面都⚪)。
-_ACTION_HELD = {
-    ("🟢", "🟢"): ("趕快再買", "短長線都強,可加碼"),
-    ("🟢", "🟡"): ("趕快再買", "技術強、基本面中性,可續抱或小加"),
-    ("🟢", "🔴"): ("趕快賣",   "技術衝高但基本面差,趁高出場別貪"),
-    ("🟡", "🟢"): ("再等等買", "基本面好,等技術轉強再加碼"),
-    ("🟡", "🟡"): ("再等等賣", "沒明顯方向,先抱著觀察"),
-    ("🟡", "🔴"): ("趕快賣",   "基本面差、技術沒撐,沒理由抱"),
-    ("🔴", "🟢"): ("再等等賣", "技術轉弱但基本面好,觀察止跌"),
-    ("🔴", "🟡"): ("趕快賣",   "技術走弱、基本面普通,考慮停損停利"),
-    ("🔴", "🔴"): ("趕快賣",   "雙弱沒戲,盡快出場"),
-}
-_ACTION_WATCH = {
-    ("🟢", "🟢"): ("趕快買",   "短長線都看好,可考慮進場"),
-    ("🟢", "🟡"): ("趕快買",   "技術強,短打可進、別久抱"),
-    ("🟢", "🔴"): ("不要買",   "基本面差的不碰,技術再強也別追"),
-    ("🟡", "🟢"): ("再等等買", "基本面好,等技術轉強再進"),
-    ("🟡", "🟡"): ("再等等買", "沒明顯訊號,再等等"),
-    ("🟡", "🔴"): ("不要買",   "基本面差,不值得進"),
-    ("🔴", "🟢"): ("不要買",   "技術弱,等止跌再說"),
-    ("🔴", "🟡"): ("不要買",   "技術弱,不用進"),
-    ("🔴", "🔴"): ("不要買",   "雙弱,不用進"),
-}
+_MOM_ZH = {"🔥": "很強", "🟢": "偏多", "🟡": "中性", "🟠": "偏弱", "🔴": "很弱", "⚪": "沒資料"}
+
+
+def _mom_level(light: str) -> str:
+    """動能燈的原始 5 段:🔥/🟢/🟡/🟠/🔴,沒資料→⚪。"""
+    s = str(light or "")
+    if "⚪" in s or "資料不足" in s or not s.strip():
+        return "⚪"
+    for e in ("🔥", "🟢", "🟡", "🟠", "🔴"):
+        if e in s:
+            return e
+    return "⚪"
+
+
+def _watch_action(mom: str, f: str) -> tuple[str, str]:
+    """沒持有(追蹤清單)的動作:5 段動能 × 基本面 → (動作, 白話原因)。"""
+    if mom == "🔴":
+        return ("不要買", "走勢明顯轉弱,等止跌再說")
+    if mom == "🟠":
+        return ("先別買", "開始走弱了,先別追,等它站穩再看")
+    if mom == "🟡":
+        if f == "🟢":
+            return ("再等等買", "公司面不錯,等動能轉強再進場")
+        if f == "🔴":
+            return ("不要買", "沒動能、公司體質又差,不值得進")
+        return ("再等等", "還沒有明顯方向,先等等看")
+    if mom == "🟢":
+        if f == "🔴":
+            return ("不要買", "雖然在漲,但公司體質差,不碰")
+        return ("可以買", "穩穩在漲、基本面也撐得住,可以慢慢進、不用搶")
+    if mom == "🔥":
+        if f == "🔴":
+            return ("不要買", "衝得兇但公司體質差,再強也別追")
+        return ("趕快買", "動能很強、正在噴,要買就要快,但別追太高")
+    return ("再等等", "訊號不明,先等等")
+
+
+def _held_action(mom: str, f: str) -> tuple[str, str]:
+    """持有中的動作(摘要用,不含損益/到價細節)→ (動作, 白話原因)。"""
+    if mom == "🔥":
+        if f == "🔴":
+            return ("續抱別加", "衝得兇但公司體質差,抱著別追加,到價分批出")
+        return ("抱緊加碼", "動能很強、還在噴,抱緊讓它跑,基本面也行可考慮加碼")
+    if mom == "🟢":
+        if f == "🔴":
+            return ("續抱但別貪", "還在漲但公司體質差,到價就分批出別凹")
+        return ("續抱", "穩穩在漲,先抱著別賣太早")
+    if mom == "🟡":
+        if f == "🔴":
+            return ("偏減碼", "沒明顯動能、公司體質又差,可分批先出一些")
+        return ("抱著等", "沒明顯動能,先耐心抱著看,別急")
+    if mom == "🟠":
+        return ("先減碼", "開始轉弱、還沒破底,先收一些、看緊一點")
+    return ("趕快賣", "走勢明顯轉弱,別凹,該走")
 
 
 def _what_to_do(short_light: str, super_short_light: str,
                 chips_light: str, company_light: str,
                 is_position: bool) -> str:
-    """根據 4 個燈號給「我該做啥」— 固定對應 6 動作 + []白話原因。
-    持有中:趕快再買 / 趕快賣 / 再等等買 / 再等等賣
-    沒持有:趕快買 / 不要買 / 再等等買
-    """
-    t = _tech_tier(short_light, super_short_light)
+    """根據燈號給「我該做啥」。動能用 5 段(🔥🟢🟡🟠🔴)、基本面用 3 段,
+    讓強勢/偏多、弱勢/偏弱 各有不同講法。
+    持有的最終定稿在 _position_advice(含損益/到價);這裡給追蹤 + 摘要用。"""
+    mom = _mom_level(short_light)
     f = _fund_tier(chips_light, company_light)
-    _lean = {"🟢": "偏多", "🟡": "中性", "🔴": "偏空"}
-    # 技術 + 基本面都還沒分析 → 直接講清楚
-    if t == "⚪" and f == "⚪":
+    if mom == "⚪" and f == "⚪":
         return "⚪ 資料不足、先別動[技術跟基本面都還沒分析,先跑分析或自己查]"
-    # 只有單面有資料 → **不給確定買賣**,明講還在等另一面分析(避免假裝兩面都看過)
     if f == "⚪":
-        return (f"⏳ 等基本面[技術{_lean[t]},但基本面還沒分析,"
+        return (f"⏳ 等基本面[動能{_MOM_ZH[mom]},但基本面還沒分析,"
                 f"先跑「基本面」再決定買賣]")
-    if t == "⚪":
+    if mom == "⚪":
+        _lean = {"🟢": "偏多", "🟡": "中性", "🔴": "偏空"}
         return (f"⏳ 等技術[基本面{_lean[f]},但技術還沒分析,"
                 f"先跑「技術面」再決定買賣]")
-    # 兩面都有資料 → 查 6 動作表
-    table = _ACTION_HELD if is_position else _ACTION_WATCH
-    action, reason = table.get((t, f), ("再等等" + ("賣" if is_position else "買"),
-                                        "訊號不明、再等等"))
+    action, reason = (_held_action if is_position else _watch_action)(mom, f)
     return f"{action}[{reason}]"
 
 
@@ -3356,17 +3381,19 @@ def _reached_target_pct(row: dict) -> int:
 
 
 def _position_advice(row: dict) -> str:
-    """持有股票的「我該做啥」決策表:動能主導、基本面修正、損益決定講法。
-      🟢 有動能 → 抱(讓它跑);基本面爛 → 續抱但別貪
-      🟡 中性   → 抱著等;基本面爛 → 偏減碼
-      🔴 轉弱   → 賣(有賺=獲利了結、虧=停損);基本面也爛 → 更堅決
+    """持有股票的「我該做啥」:動能(5段)主導、基本面修正、損益決定講法。
+      🔥 強勢 → 抱緊,可加碼;基本面爛 → 續抱別加
+      🟢 偏多 → 續抱;基本面爛 → 續抱但別貪
+      🟡 中性 → 抱著等;基本面爛 → 偏減碼
+      🟠 偏弱 → 先減碼/留意(還沒破底);有賺先收一些
+      🔴 弱勢 → 賣(有賺=獲利了結、虧=停損);基本面也爛 → 更堅決
     """
     short = row.get("短線燈號", "")
     chips = row.get("籌碼面燈號", "")
     comp = row.get("公司面燈號", "")
-    t = _tech_tier(short)
+    mom = _mom_level(short)
     f = _fund_tier(chips, comp)
-    if t == "⚪":
+    if mom == "⚪":
         return "⏳ 等技術[技術還沒分析,先跑技術面再決定]"
 
     reached = _reached_target_pct(row)
@@ -3377,22 +3404,30 @@ def _position_advice(row: dict) -> str:
         gain = f"賺 {pnl:.0f}%"
     else:
         gain = ""
+    head = f"{gain}、" if gain else ""
 
-    if t == "🟢":   # 有動能 → 抱
+    if mom == "🔥":       # 強勢 → 抱緊,可加碼
         if f == "🔴":
-            head = f"{gain}、" if gain else ""
+            return f"續抱別加[{head}衝得兇但公司體質差,抱著別追加,到價就分批出]"
+        return f"抱緊加碼[{head}動能很強、還在噴,抱緊讓它跑,基本面也行可考慮加碼]"
+    if mom == "🟢":       # 偏多 → 續抱
+        if f == "🔴":
             return f"續抱但別貪[{head}還在漲但公司體質差,到價就分批出別凹]"
-        head = f"{gain}、" if gain else ""
-        return f"續抱[{head}技術還強、還在漲,先抱著別賣太早(想穩可先賣一點)]"
-    if t == "🟡":   # 中性 → 抱著等
+        return f"續抱[{head}穩穩在漲,先抱著別賣太早(想穩可先賣一點)]"
+    if mom == "🟡":       # 中性 → 抱著等
         if f == "🔴":
             return "偏減碼[沒明顯動能、公司體質又差,可分批先出一些]"
         return "抱著等[沒明顯動能,先耐心抱著看,別急]"
-    # t == 🔴 轉弱 → 賣
+    if mom == "🟠":       # 偏弱 → 先減碼/留意
+        extra = "、基本面也差" if f == "🔴" else ""
+        if gain:
+            return f"先減碼[{gain}、開始轉弱{extra},先收一些獲利、留意有沒有破底]"
+        return f"留意[開始轉弱{extra}、還沒破底,先看緊一點,破了再走]"
+    # 🔴 弱勢 → 賣
     extra = "、基本面也差更該走" if f == "🔴" else ""
     if gain:
-        return f"賣一批[{gain}又技術轉弱{extra},獲利了結落袋]"
-    return f"停損[技術轉弱又在虧{extra},別凹,考慮停損]"
+        return f"趕快賣[{gain}又技術明顯轉弱{extra},獲利了結落袋]"
+    return f"停損[技術明顯轉弱又在虧{extra},別凹,考慮停損]"
 
 
 def resync_and_fill_names(scope: str = "all") -> dict:

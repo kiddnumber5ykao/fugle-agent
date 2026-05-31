@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 21:45  (原最後更新 2026-05-29)(全新)
+# 📅 ★最新版★ 上傳於 2026-05-31 22:41  (原最後更新 2026-05-29)(全新)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -56,34 +56,38 @@ def _num(v) -> float | None:
 
 
 def _action_rank(advice: str) -> tuple:
-    """排序鍵:趕快(0) → 再等等(1) → 不要買(2) → 等分析(3) → 資料不足(4)。
-    同層:賣優先於買。"""
+    """排序鍵:最該動(0) → 軟動作/再等等(1) → 抱著(2) → 不要/先別(3)
+    → 等分析(4)。同層:賣/減碼 優先於買。
+    動作詞:趕快買/趕快賣/停損/先減碼=0;可以買/再等等/留意/偏減碼=1;
+            抱緊加碼/續抱*/抱著等=2;不要買/先別買=3;⏳等…=4。"""
     a = str(advice or "")
-    if a.startswith("趕快") or a.startswith("賣一批"):
-        tier = 0   # 最該動:趕快買/賣、到價賣一批
-    elif a.startswith("再等等"):
+    if (a.startswith("趕快") or a.startswith("停損")
+            or a.startswith("先減碼") or a.startswith("賣一批")):
+        tier = 0
+    elif (a.startswith("可以買") or a.startswith("再等等")
+          or a.startswith("留意") or a.startswith("偏減碼")):
         tier = 1
-    elif a.startswith("續抱") or a.startswith("抱"):
-        tier = 2   # 抱著就好,不用動
-    elif a.startswith("不要"):
+    elif a.startswith("抱") or a.startswith("續抱"):
+        tier = 2
+    elif a.startswith("不要") or a.startswith("先別"):
         tier = 3
     elif "等基本面" in a or "等技術" in a or a.startswith("⏳"):
         tier = 4
     else:
         tier = 5
-    sub = 0 if "賣" in a else 1
+    sub = 0 if ("賣" in a or "減碼" in a or "停損" in a) else 1
     return (tier, sub)
 
 
 def _action_emoji(advice: str) -> str:
     a = str(advice or "")
-    if "賣" in a:
+    if a.startswith("不要") or a.startswith("先別"):
+        return "🟡"
+    if "賣" in a or "停損" in a or "減碼" in a:
         return "🔴"
-    if a.startswith("續抱") or a.startswith("抱"):
+    if "買" in a or a.startswith("抱") or a.startswith("續抱"):
         return "🟢"
-    if "買" in a:
-        return "🟢"
-    if a.startswith("⏳") or "等" in a:
+    if a.startswith("⏳") or "等" in a or a.startswith("留意"):
         return "🟡"
     return "⚪"
 
@@ -151,18 +155,18 @@ def _pill(text: str, kind: str) -> str:
 
 def _pill_kind(advice: str) -> str:
     a = str(advice or "")
-    if a.startswith("續抱") or a.startswith("抱"):
-        return "success"
-    if "賣" in a or a.startswith("不要"):
-        return "danger" if "賣" in a else "gray"
-    if "買" in a and "不要" not in a:
+    if a.startswith("不要") or a.startswith("先別"):
+        return "gray"
+    if "賣" in a or "停損" in a or "減碼" in a:
+        return "danger"
+    if "買" in a or a.startswith("抱") or a.startswith("續抱"):
         return "success"
     return "gray"
 
 
 # ---------------------------------------------------------------------------
 def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
-           workflow_running=None) -> None:
+           workflow_running=None, cleanup_watchlist=None) -> None:
     st.markdown("""<style>
     .gyh-card div[data-testid="stExpander"]{border:0.5px solid rgba(127,127,127,.2);border-radius:12px;margin-bottom:8px}
     </style>""", unsafe_allow_html=True)
@@ -222,6 +226,19 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     # ── 更多(收起來)──
     with st.expander("⚙️ 更多"):
         if st.button("🔁 重新整理", use_container_width=True):
+            st.rerun()
+        if cleanup_watchlist and st.button(
+                "🧹 整理追蹤清單", use_container_width=True,
+                help="移除已持有的、重複的留第一個、把賣光過的補回來(追蹤理由=曾經)"):
+            with st.spinner("整理中…"):
+                res = cleanup_watchlist()
+            if res.get("ok"):
+                st.success(
+                    f"✅ 已整理:移除持有 {res.get('removedHeld', 0)}、"
+                    f"去重 {res.get('removedDup', 0)}、補曾經 {res.get('added', 0)}")
+            else:
+                st.error(f"❌ {res.get('error')}")
+            st.cache_data.clear()
             st.rerun()
         if cancel_all and st.button("🛑 終止跑中的更新", use_container_width=True):
             res = cancel_all()
