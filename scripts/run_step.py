@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 📅 ★最新版★ 上傳於 2026-05-31 22:53  (原最後更新 2026-05-29)(全新:單一步驟,給多 job 平行用)
+# 📅 ★最新版★ 上傳於 2026-05-31 23:22  (原最後更新 2026-05-29)(全新:單一步驟,給多 job 平行用)
 """單一步驟入口 — 給 GitHub Actions 多 job 平行跑用。
 
 把「全更新」拆成可平行的步驟,各自一個 job:
@@ -42,18 +42,38 @@ def _new_watchlist_symbols(time_col: str) -> list[str]:
     return out
 
 
+def _new_position_symbols(time_col: str) -> list[str]:
+    """持股裡『該步驟還沒做過』的代號(資料時間欄空白 = 新持股、還沒分析)。"""
+    out: list[str] = []
+    try:
+        from fugle_agent import sheets as _sheets
+        for p in (_sheets.load_positions() or []):
+            if p.get("_error"):
+                continue
+            sym = str(p.get("symbol") or p.get("代號") or "").strip()
+            done = str(p.get(time_col) or "").strip()
+            if sym and not done and sym not in out:
+                out.append(sym)
+    except Exception:
+        pass
+    return out
+
+
 def main() -> None:
     step = (sys.argv[1] if len(sys.argv) > 1 else "").lower().strip()
     scope = (sys.argv[2] if len(sys.argv) > 2 else "all").lower().strip()
     if step not in ("resync", "technical", "fundamental", "recompute"):
         print(f"❌ 不認識的步驟: {step!r}")
         sys.exit(2)
-    if scope not in ("all", "positions", "watchlist", "watchlist_new"):
+    if scope not in ("all", "positions", "watchlist", "watchlist_new", "positions_new"):
         scope = "all"
 
-    # watchlist_new = 只跑追蹤清單裡「還沒分析過」的新代號(省錢)
+    # *_new = 只幫「還沒分析過的新代號」補基本面(省錢):
+    #   watchlist_new(新追蹤更新)— 技術 + 基本面都只跑新代號
+    #   positions_new(新交易更新)— 技術跑全部持股(免費刷股價),基本面只補新持股
     wl_new = scope == "watchlist_new"
-    eff_scope = "watchlist" if wl_new else scope
+    pos_new = scope == "positions_new"
+    eff_scope = ("watchlist" if wl_new else "positions" if pos_new else scope)
 
     os.environ.setdefault("FUGLE_MOCK", "0")
     from fugle_agent.tools import (resync_and_fill_names, organize_all_technical,
@@ -72,12 +92,13 @@ def main() -> None:
               f"實際損益 {r.get('realized')}")
     elif step == "technical":
         args = {"scope": eff_scope}
-        if wl_new:
+        if wl_new:  # 追蹤:技術只跑新代號
             syms = _new_watchlist_symbols("技術資料時間")
             if not syms:
                 print("   ℹ️ 沒有新的追蹤代號,技術面略過"); return
             args["symbols"] = syms
-            print(f"   🆕 只跑新追蹤(技術): {syms}")
+            print(f"   🆕 新追蹤(技術): {syms}")
+        # pos_new:技術跑全部持股(免費,刷新所有股價/動能),不加 symbols 篩選
         asyncio.run(organize_all_technical.handler(args))
     elif step == "fundamental":
         args = {"scope": eff_scope}
@@ -86,7 +107,13 @@ def main() -> None:
             if not syms:
                 print("   ℹ️ 沒有新的追蹤代號,基本面略過"); return
             args["symbols"] = syms
-            print(f"   🆕 只跑新追蹤(基本面): {syms}")
+            print(f"   🆕 新追蹤(基本面): {syms}")
+        elif pos_new:  # 新交易:基本面只補沒分析過的新持股
+            syms = _new_position_symbols("基本面資料時間")
+            if not syms:
+                print("   ℹ️ 沒有新持股要補基本面,基本面略過"); return
+            args["symbols"] = syms
+            print(f"   🆕 新持股(基本面): {syms}")
         asyncio.run(organize_all_deep.handler(args))
     elif step == "recompute":
         adv = _recompute_advice(eff_scope)
