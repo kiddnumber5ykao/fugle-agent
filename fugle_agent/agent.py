@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 20:54  (原最後更新 2026-05-29)(對話唯讀過濾寫入工具)
+# 📅 ★最新版★ 上傳於 2026-06-01 00:09  (原最後更新 2026-05-29)(對話唯讀過濾寫入工具)
 """Anthropic-powered agent — uses the `anthropic` Python SDK directly.
 
 Two entry points:
@@ -315,7 +315,7 @@ WRITE_TOOL_NAMES = {
 WEB_SEARCH_MAX_USES = int(os.getenv("WEB_SEARCH_MAX_USES", "5"))
 
 
-def _anthropic_tool_specs(read_only: bool = False) -> list[dict]:
+def _anthropic_tool_specs(read_only: bool = True) -> list[dict]:
     """Custom (client-side) tools + Anthropic-managed server tools (web_search).
 
     Server tool 放前面、custom tools 放後面,並在「最後一個 custom tool」掛
@@ -581,7 +581,7 @@ def _trim_history_inplace(history: list, *, max_messages: int) -> int:
 # ---------- main loop ----------
 
 async def run_turn_streaming(user_input: str, history: list,
-                             read_only: bool = False) -> AsyncIterator[dict]:
+                             read_only: bool = True) -> AsyncIterator[dict]:
     """Run one conversational turn, yielding events for each meaningful unit
     of work.  ``history`` is mutated in place so subsequent turns get context.
 
@@ -611,6 +611,13 @@ async def run_turn_streaming(user_input: str, history: list,
         {"type": "text", "text": system_stable, "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": system_dynamic},
     ]
+    if read_only:
+        system_blocks.append({"type": "text", "text": (
+            "\n\n【唯讀模式】你現在只能『讀』Google Sheet 來回答問題,"
+            "絕對不能新增/修改/刪除任何資料。所有寫入工具都已停用。"
+            "如果使用者要你記交易、加追蹤、整理或更新 Sheet,請禮貌說明:"
+            "對話是唯讀的,請改用首頁儀表板的按鈕(新交易更新 / 新追蹤更新),"
+            "或自己在 Sheet 手動編輯。不要假裝已經幫他寫好了。")})
 
     # 兩段式縮減上下文:
     # (1) Compact 舊工具結果(留前 400 字 stub) — 大幅省 token,對話脈絡保留
