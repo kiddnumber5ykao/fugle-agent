@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 23:57  (原最後更新 2026-05-29)(全新)
+# 📅 ★最新版★ 上傳於 2026-06-01 00:13  (原最後更新 2026-05-29)(全新)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -215,32 +215,40 @@ def _pill_kind(advice: str) -> str:
     return "gray"
 
 
-# 依「我該做啥」分類的標題(對齊 _action_rank 的 tier)
-_TIER_LABEL = {
-    0: "👉 最該動手",
-    1: "🤔 再看看 / 考慮",
-    2: "😌 抱著就好",
-    3: "🚫 先不用動",
-    4: "⏳ 等資料",
-    5: "其他",
-}
+# 每個「動作詞」的優先序(最優先→最不優先)。比對時用 startswith,
+# 所以較長/較專一的要排在較短的前面(例:續抱別加 要在 續抱 之前)。
+_ACTION_ORDER = [
+    "趕快賣", "停損", "先減碼", "趕快買", "偏減碼",
+    "可以買", "再等等買", "留意", "再等等",
+    "抱緊加碼", "續抱別加", "續抱但別貪", "續抱", "抱著等",
+    "先別買", "不要買",
+    "⏳", "⚪",
+]
 
 
-def _tier_header(t: int) -> str:
-    return (f'<div style="margin:14px 0 4px;font-weight:600;font-size:13px;'
-            f'color:#5F5E5A">{_TIER_LABEL.get(t, "其他")}</div>')
+def _action_order_key(advice: str) -> int:
+    """回傳該動作詞在優先序裡的名次(越小越優先)。"""
+    head = _action_short(advice)
+    for i, w in enumerate(_ACTION_ORDER):
+        if head.startswith(w):
+            return i
+    return len(_ACTION_ORDER)
 
 
 def _render_cards(rows: list[dict], card_fn) -> None:
-    """依 _action_rank 排序 + 分類標題,逐張畫卡片。"""
-    rows.sort(key=lambda r: _action_rank(_g(r, "我該做啥", "綜合建議")))
+    """依「動作詞」優先序排序,並用『動作詞本身』當分組標題(詞不同就分開)。"""
+    rows.sort(key=lambda r: _action_order_key(_g(r, "我該做啥", "綜合建議")))
     st.markdown('<div class="gyh-card">', unsafe_allow_html=True)
-    last_tier = None
+    last_head = None
     for r in rows:
-        t = _action_rank(_g(r, "我該做啥", "綜合建議"))[0]
-        if t != last_tier:
-            st.markdown(_tier_header(t), unsafe_allow_html=True)
-            last_tier = t
+        adv = _g(r, "我該做啥", "綜合建議")
+        head = _action_short(adv)
+        if head != last_head:
+            st.markdown(
+                f'<div style="margin:14px 0 4px;font-weight:600;font-size:13px;'
+                f'color:#5F5E5A">{_action_icon(adv)} {head}</div>',
+                unsafe_allow_html=True)
+            last_head = head
         card_fn(r)
     st.markdown('</div>', unsafe_allow_html=True)
 
