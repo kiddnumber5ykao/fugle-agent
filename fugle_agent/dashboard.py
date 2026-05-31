@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 20:54  (原最後更新 2026-05-29)(全新)
+# 📅 ★最新版★ 上傳於 2026-05-31 21:45  (原最後更新 2026-05-29)(全新)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -24,12 +24,13 @@ _DOT = {"🟢": "#639922", "🟡": "#BA7517", "🔴": "#E24B4A", "⚪": "#B4B2A9
 
 
 def _tier(light: str) -> str:
+    # 動能燈 5 段:🔥(強勢)歸🟢、🟠(偏弱)歸🔴
     s = str(light or "")
     if "⚪" in s or "資料不足" in s or not s.strip():
         return "⚪"
-    if "🟢" in s:
+    if "🔥" in s or "🟢" in s:
         return "🟢"
-    if "🔴" in s:
+    if "🟠" in s or "🔴" in s:
         return "🔴"
     if "🟡" in s:
         return "🟡"

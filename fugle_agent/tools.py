@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 20:54  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
+# 📅 ★最新版★ 上傳於 2026-05-31 21:45  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -2772,49 +2772,56 @@ def _short_term_light(signals: dict) -> str:
 
 
 def _momentum_light(signals: dict) -> tuple[str, str]:
-    """動能燈 + 白話原因。看 趨勢(站上/跌破10日線)+ 速度(近3天)+ 量。
-    回傳 (燈號, 像朋友講話的白話原因)。"""
+    """動能燈(五段)+ 白話原因。用 趨勢(離10日線)+ 速度(近3天)+ 量 算動能強弱,
+    切 🔥強勢 / 🟢偏多 / 🟡中性 / 🟠偏弱 / 🔴弱勢,讓同色裡也分得出高低。
+    回傳 (燈號, 像朋友講話的白話原因)。
+
+    下游 _light_emoji 會把 🔥→🟢、🟠→🔴 收斂成 3 段去判「我該做啥」,
+    所以顯示是 5 段、決策行為仍穩定。"""
     if not signals.get("ok"):
         return ("⚪ 資料不足", "抓不到股價資料,沒辦法看")
-    m = signals.get("dist_ma10_pct", 0)      # 距10日線%:>0 站上、<0 跌破
-    c = signals.get("change_3d_pct", 0)       # 近3天漲跌%
-    vr = signals.get("vol_ratio_5_20", 1.0)   # 近期量 vs 平常量
-    up_trend = m >= 0
-    rising = c >= 1
-    falling = c <= -1
+    m = signals.get("dist_ma10_pct", 0) or 0       # 距10日線%:>0 站上、<0 跌破
+    c = signals.get("change_3d_pct", 0) or 0        # 近3天漲跌%
+    vr = signals.get("vol_ratio_5_20", 1.0) or 1.0  # 近期量 vs 平常量
     big_vol = vr >= 1.3
     low_vol = vr <= 0.7
 
-    # 判燈
-    if up_trend and rising:
-        light = "🟢 有動能"
-    elif (not up_trend) and falling:
-        light = "🔴 轉弱"
-    else:
+    # 動能強弱分數:趨勢(離均價)+ 速度(近3天);量能放大/縮小信心
+    s = m * 0.5 + c
+    if big_vol:
+        s *= 1.25
+    elif low_vol:
+        s *= 0.75
+
+    if s >= 4.5:
+        light = "🔥 強勢"
+    elif s >= 1.2:
+        light = "🟢 偏多"
+    elif s > -1.2:
         light = "🟡 中性"
+    elif s > -4.5:
+        light = "🟠 偏弱"
+    else:
+        light = "🔴 弱勢"
 
     # 白話原因(像朋友講)
-    if light == "🟢 有動能":
-        if big_vol:
-            reason = "最近一直在漲,而且越來越多人在搶買,看起來還有得衝"
-        elif low_vol:
-            reason = "最近在漲,不過買的人沒特別多,動能還行但別太衝動"
+    if light == "🔥 強勢":
+        tail = "一堆人在搶買,氣勢很強" if big_vol else ("量沒特別爆但走勢很猛" if low_vol else "氣勢很強")
+        reason = f"漲得又快又猛,股價衝在均價上面,{tail},看起來還在往上衝"
+    elif light == "🟢 偏多":
+        tail = "越來越多人進場" if big_vol else ("不過買的人沒特別多" if low_vol else "買盤穩穩的")
+        reason = f"穩穩在漲,站在均價之上,{tail},看起來還會往上"
+    elif light == "🟡 中性":
+        if m >= 0:
+            reason = "還在均價之上,但這幾天沒什麼動,卡在那上上下下,先看看"
         else:
-            reason = "最近站穩在漲,買盤穩穩的,看起來還在往上"
-    elif light == "🔴 轉弱":
-        if big_vol:
-            reason = "最近一直在跌,而且賣的人越來越多,還沒看到止跌"
-        elif low_vol:
-            reason = "最近在跌,不過賣壓不大,可能跌一跌就會停"
-        else:
-            reason = "最近往下掉、跌破了近期均價,氣氛偏弱"
-    else:  # 🟡 中性
-        if up_trend and not rising:
-            reason = "還在均價之上,但這幾天沒什麼動,卡在那邊上上下下"
-        elif falling:
-            reason = "這幾天小跌,但還沒真的轉弱,先觀望"
-        else:
-            reason = "最近卡在區間上上下下,還看不出要往哪走,先觀望"
+            reason = "最近卡在區間裡上上下下,看不出要往哪走,先看看"
+    elif light == "🟠 偏弱":
+        tail = ",賣的人在變多" if big_vol else (",不過賣壓還不大" if low_vol else "")
+        reason = f"開始往下掉了{tail},雖然還沒真的破底,但要留意、先別急著追"
+    else:  # 🔴 弱勢
+        tail = ",賣壓還很重" if big_vol else (",不過賣壓沒爆" if low_vol else "")
+        reason = f"跌得明顯、跌破了近期均價{tail},氣氛很弱,還沒看到止跌"
     return (light, reason)
 
 
@@ -3242,12 +3249,13 @@ def _combined_advice(short_light: str, super_short_light: str,
 
 
 def _light_emoji(light: str) -> str:
-    """把任何燈號字串收斂成單一 emoji:⚪(資料不足)/🟢/🟡/🔴。"""
+    """把任何燈號字串收斂成單一 emoji:⚪(資料不足)/🟢/🟡/🔴。
+    動能燈是 5 段:🔥(強勢)當🟢、🟠(偏弱)當🔴,讓決策仍走 3 段邏輯。"""
     if "⚪" in light or "資料不足" in light:
         return "⚪"
-    if "🟢" in light:
+    if "🔥" in light or "🟢" in light:
         return "🟢"
-    if "🔴" in light:
+    if "🟠" in light or "🔴" in light:
         return "🔴"
     if "🟡" in light:
         return "🟡"
@@ -4080,9 +4088,9 @@ async def what_to_do_now(args: dict) -> dict:
 
     def _light(v: str | None) -> str:
         s = str(v or "")
-        if "🟢" in s: return "🟢"
+        if "🔥" in s or "🟢" in s: return "🟢"
+        if "🟠" in s or "🔴" in s: return "🔴"
         if "🟡" in s: return "🟡"
-        if "🔴" in s: return "🔴"
         return "—"
 
     try:
