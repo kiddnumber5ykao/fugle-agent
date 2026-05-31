@@ -1,4 +1,4 @@
-# 📅 最後更新:2026-05-29(讀 Sheet 防快取版)
+# 📅 ★最新版★ 上傳於 2026-05-31 20:54  (原最後更新 2026-05-29)(讀 Sheet 防快取版)
 """Google Sheets reader — pulls public sheet tabs as CSV.
 
 No OAuth or service account needed; relies on the sheet being shared as

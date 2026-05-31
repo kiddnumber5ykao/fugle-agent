@@ -1,4 +1,4 @@
-# 📅 最後更新:2026-05-29(全新)
+# 📅 ★最新版★ 上傳於 2026-05-31 20:54  (原最後更新 2026-05-29)(全新)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -58,16 +58,18 @@ def _action_rank(advice: str) -> tuple:
     """排序鍵:趕快(0) → 再等等(1) → 不要買(2) → 等分析(3) → 資料不足(4)。
     同層:賣優先於買。"""
     a = str(advice or "")
-    if a.startswith("趕快"):
-        tier = 0
+    if a.startswith("趕快") or a.startswith("賣一批"):
+        tier = 0   # 最該動:趕快買/賣、到價賣一批
     elif a.startswith("再等等"):
         tier = 1
+    elif a.startswith("續抱") or a.startswith("抱"):
+        tier = 2   # 抱著就好,不用動
     elif a.startswith("不要"):
-        tier = 2
-    elif "等基本面" in a or "等技術" in a or a.startswith("⏳"):
         tier = 3
-    else:
+    elif "等基本面" in a or "等技術" in a or a.startswith("⏳"):
         tier = 4
+    else:
+        tier = 5
     sub = 0 if "賣" in a else 1
     return (tier, sub)
 
@@ -76,6 +78,8 @@ def _action_emoji(advice: str) -> str:
     a = str(advice or "")
     if "賣" in a:
         return "🔴"
+    if a.startswith("續抱") or a.startswith("抱"):
+        return "🟢"
     if "買" in a:
         return "🟢"
     if a.startswith("⏳") or "等" in a:
@@ -146,6 +150,8 @@ def _pill(text: str, kind: str) -> str:
 
 def _pill_kind(advice: str) -> str:
     a = str(advice or "")
+    if a.startswith("續抱") or a.startswith("抱"):
+        return "success"
     if "賣" in a or a.startswith("不要"):
         return "danger" if "賣" in a else "gray"
     if "買" in a and "不要" not in a:
@@ -154,7 +160,8 @@ def _pill_kind(advice: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None) -> None:
+def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
+           workflow_running=None) -> None:
     st.markdown("""<style>
     .gyh-card div[data-testid="stExpander"]{border:0.5px solid rgba(127,127,127,.2);border-radius:12px;margin-bottom:8px}
     </style>""", unsafe_allow_html=True)
@@ -167,19 +174,22 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None) -
         mode = st.radio("檢視", ["持有", "追蹤"], horizontal=True,
                         label_visibility="collapsed", key="dash_mode")
 
-    # ── 全更新 / 盤中更新 ──(跑中時禁用,避免重複按)
-    full_ind = job_indicator("full_update")
-    intra_ind = job_indicator("intraday_update")
-    full_running = "🔄" in full_ind
-    intra_running = "🔄" in intra_ind
-    # 全更新跑的時候,盤中更新也一起鎖(它們會互相覆寫)
-    any_running = full_running or intra_running
     # 只更新「你現在看的」那一邊:持有→positions、追蹤→watchlist
     _scope = "positions" if mode == "持有" else "watchlist"
     _scope_zh = "股票部位" if mode == "持有" else "追蹤清單"
+    # ── 全更新 / 盤中更新 ──(只鎖「這個 scope」在跑的,另一邊不受影響)
+    if workflow_running:
+        full_running = workflow_running("full_update.yml", _scope)
+        intra_running = workflow_running("intraday_update.yml", _scope)
+    else:
+        full_running = "🔄" in job_indicator("full_update")
+        intra_running = "🔄" in job_indicator("intraday_update")
+    any_running = full_running or intra_running
+    _f = " 🔄" if full_running else ""
+    _i = " 🔄" if intra_running else ""
     b1, b2 = st.columns(2)
     with b1:
-        if st.button(f"🔄 全更新{full_ind}",
+        if st.button(f"🔄 全更新{_f}",
                      use_container_width=True, disabled=any_running,
                      help=f"只更新「{_scope_zh}」:重算交易 → 技術面 → 基本面 → 我該做啥(慢)"):
             r = trigger_workflow("full_update.yml", inputs={"scope": _scope})
@@ -190,7 +200,7 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None) -
             else:
                 st.error(f"❌ {r.get('error')}")
     with b2:
-        if st.button(f"⚡ 盤中更新{intra_ind}",
+        if st.button(f"⚡ 盤中更新{_i}",
                      use_container_width=True, disabled=any_running,
                      help=f"只更新「{_scope_zh}」:重算交易 → 技術面 → 我該做啥(跳過基本面,快)"):
             r = trigger_workflow("intraday_update.yml", inputs={"scope": _scope})
@@ -292,13 +302,13 @@ def _what_to_do_summary(rows: list[dict], is_position: bool) -> None:
         adv = _g(r, "我該做啥", "綜合建議")
         code = _g(r, "代號", "symbol")
         short = _action_short(adv)
-        if "趕快賣" in adv:
+        if "趕快賣" in adv or "賣一批" in adv:
             sell.append(code)
         elif "趕快買" in adv or "趕快再買" in adv:
             buy.append(code)
     parts = []
     if sell:
-        parts.append(_pill("趕快賣", "danger") + " " + "、".join(sell))
+        parts.append(_pill("該賣", "danger") + " " + "、".join(sell))
     if buy:
         parts.append(_pill("趕快買", "success") + " " + "、".join(buy))
     if not parts:
@@ -356,46 +366,49 @@ def _watch_card(r: dict) -> None:
 
 
 def _detail_common(r: dict, adv: str) -> None:
-    # 該做啥 + 原因
-    reason = _action_reason(adv)
-    st.markdown(_pill(_action_short(adv), _pill_kind(adv))
-                + (f'　<span style="color:#5F5E5A">{reason}</span>' if reason else ""),
-                unsafe_allow_html=True)
-    # 燈號
-    short, sup = _g(r, "短線燈號"), _g(r, "超短線燈號")
-    chips, comp = _g(r, "籌碼面燈號"), _g(r, "公司面燈號")
-    st.markdown(
-        f'<div style="margin-top:8px;font-size:13px">'
-        f'<span style="color:#5F5E5A">技術面</span>　{_dots([short, sup])}'
-        f'<span style="color:#5F5E5A">短線 / 超短線</span><br>'
-        f'<span style="color:#5F5E5A">基本面</span>　{_dots([chips, comp])}'
-        f'<span style="color:#5F5E5A">籌碼 / 公司</span></div>',
-        unsafe_allow_html=True)
-    # 技術描述
-    tech_lines = [(k, _g(r, k)) for k in
-                  ("最新表現", "最近3天", "這週氛圍", "近10天走勢", "量能變化", "離20天高低")]
-    tech_lines = [(k, v) for k, v in tech_lines if v]
-    tt, ts = _rel_time(_g(r, "技術資料時間"), 60 * 24 * 2)
-    if tech_lines:
-        body = "".join(f'<div style="display:flex;justify-content:space-between;font-size:13px;'
-                       f'padding:2px 0"><span style="color:#5F5E5A">{k}</span><span>{v}</span></div>'
-                       for k, v in tech_lines)
-        st.markdown(f'<div style="margin-top:8px"><b style="font-size:13px">技術面</b>'
-                    f' <span style="color:{"#A32D2D" if ts else "#5F5E5A"};font-size:12px">· {tt}'
-                    f'{" ⚠️久" if ts else ""}</span>{body}</div>', unsafe_allow_html=True)
-    # 基本面描述
-    fund_lines = [(k, _g(r, k)) for k in
-                  ("估值", "配息", "營收動能", "法人籌碼", "近期新聞重點")]
-    fund_lines = [(k, v) for k, v in fund_lines if v]
+    """順序:損益 → 動能(+白話原因) → 基本面(+白話原因) → 我該做啥(最後)。"""
+    mut = "color:#5F5E5A"
+    # 1) 損益(持有才有)
+    pnl_pct = _g(r, "損益%")
+    if pnl_pct:
+        pnl = _g(r, "損益")
+        try:
+            col = "var(--color-text-success)" if float(pnl_pct) >= 0 else "var(--color-text-danger)"
+        except ValueError:
+            col = "inherit"
+        st.markdown(f'💰 <b>損益</b> <span style="color:{col};font-weight:500">{pnl_pct}%'
+                    f'{("  " + pnl) if pnl else ""}</span>', unsafe_allow_html=True)
+    # 2) 動能(+ 白話原因)
+    short = _g(r, "短線燈號")
+    mom = _g(r, "動能原因")
+    st.markdown(f'<div style="margin-top:8px">⚡ <b>動能</b> {short}'
+                + (f'<br><span style="{mut};font-size:13px">← {mom}</span>' if mom else "")
+                + '</div>', unsafe_allow_html=True)
+    # 3) 基本面 — 拆成「公司面」+「籌碼面」兩塊,各自一個燈 + 白話原因
     ft, fs = _rel_time(_g(r, "基本面資料時間"), 60 * 24 * 5)
-    if fund_lines:
+
+    def _fund_block(title: str, light: str, items: list[tuple[str, str]]) -> None:
+        lines = [(k, _g(r, k)) for k in items]
+        lines = [(k, v) for k, v in lines if v]
         body = "".join(f'<div style="display:flex;justify-content:space-between;font-size:13px;'
-                       f'padding:2px 0"><span style="color:#5F5E5A">{k}</span><span>{v}</span></div>'
-                       for k, v in fund_lines)
-        st.markdown(f'<div style="margin-top:8px"><b style="font-size:13px">基本面</b>'
-                    f' <span style="color:{"#A32D2D" if fs else "#5F5E5A"};font-size:12px">· {ft}'
-                    f'{" ⚠️久" if fs else ""}</span>{body}</div>', unsafe_allow_html=True)
-    # 本次花費(基本面 API 成本)
+                       f'padding:2px 0"><span style="{mut}">{k}</span><span>{v}</span></div>'
+                       for k, v in lines)
+        st.markdown(f'<div style="margin-top:10px">🏢 <b>{title}</b> {light or "—"}</div>'
+                    + body, unsafe_allow_html=True)
+
+    _fund_block("公司面", _g(r, "公司面燈號"),
+                ["估值", "配息", "營收動能"])
+    _fund_block("籌碼面", _g(r, "籌碼面燈號"),
+                ["法人籌碼", "近期新聞重點"])
+    st.caption(f"基本面資料 {ft}{' ⚠️舊' if fs else ''}")
+    # 4) 我該做啥(最後)
+    reason = _action_reason(adv)
+    st.markdown('<div style="margin-top:10px;border-top:0.5px solid rgba(127,127,127,.2);'
+                'padding-top:8px">👉 <b>我該做啥</b>　'
+                + _pill(_action_short(adv), _pill_kind(adv))
+                + (f'<br><span style="{mut};font-size:13px">{reason}</span>' if reason else "")
+                + '</div>', unsafe_allow_html=True)
+    # 本次花費
     cost = _g(r, "本次花費")
     if cost:
         st.caption(f"💰 本檔基本面花費 {cost}(估)")

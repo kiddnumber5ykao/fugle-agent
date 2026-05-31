@@ -1,4 +1,4 @@
-# 📅 最後更新:2026-05-29(我該做啥 + 資料不足燈 + resync 一條龍)
+# 📅 ★最新版★ 上傳於 2026-05-31 20:54  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -2771,6 +2771,53 @@ def _short_term_light(signals: dict) -> str:
     return "🔴 看衰"
 
 
+def _momentum_light(signals: dict) -> tuple[str, str]:
+    """動能燈 + 白話原因。看 趨勢(站上/跌破10日線)+ 速度(近3天)+ 量。
+    回傳 (燈號, 像朋友講話的白話原因)。"""
+    if not signals.get("ok"):
+        return ("⚪ 資料不足", "抓不到股價資料,沒辦法看")
+    m = signals.get("dist_ma10_pct", 0)      # 距10日線%:>0 站上、<0 跌破
+    c = signals.get("change_3d_pct", 0)       # 近3天漲跌%
+    vr = signals.get("vol_ratio_5_20", 1.0)   # 近期量 vs 平常量
+    up_trend = m >= 0
+    rising = c >= 1
+    falling = c <= -1
+    big_vol = vr >= 1.3
+    low_vol = vr <= 0.7
+
+    # 判燈
+    if up_trend and rising:
+        light = "🟢 有動能"
+    elif (not up_trend) and falling:
+        light = "🔴 轉弱"
+    else:
+        light = "🟡 中性"
+
+    # 白話原因(像朋友講)
+    if light == "🟢 有動能":
+        if big_vol:
+            reason = "最近一直在漲,而且越來越多人在搶買,看起來還有得衝"
+        elif low_vol:
+            reason = "最近在漲,不過買的人沒特別多,動能還行但別太衝動"
+        else:
+            reason = "最近站穩在漲,買盤穩穩的,看起來還在往上"
+    elif light == "🔴 轉弱":
+        if big_vol:
+            reason = "最近一直在跌,而且賣的人越來越多,還沒看到止跌"
+        elif low_vol:
+            reason = "最近在跌,不過賣壓不大,可能跌一跌就會停"
+        else:
+            reason = "最近往下掉、跌破了近期均價,氣氛偏弱"
+    else:  # 🟡 中性
+        if up_trend and not rising:
+            reason = "還在均價之上,但這幾天沒什麼動,卡在那邊上上下下"
+        elif falling:
+            reason = "這幾天小跌,但還沒真的轉弱,先觀望"
+        else:
+            reason = "最近卡在區間上上下下,還看不出要往哪走,先觀望"
+    return (light, reason)
+
+
 def _super_short_term_light(signals: dict) -> str:
     """超短線燈號 (B) — 2-5 天視角 — 重今天表現 + 量 + 3 天動能。"""
     if not signals.get("ok"):
@@ -2834,7 +2881,14 @@ JSON 格式(每個欄位都要):
 - institutional: 連續賣超→-2 / 賣超→-1 / 持平→0 / 買超→1 / 大買→2
 - news: 重大利空→-2 / 利空→-1 / 中性→0 / 利多→1 / 重大利多→2
 
-用白話、不要術語。資料找不到該項就寫「資料不足」+ score 設 0。
+⚠️ 描述文字要**超白話、像跟朋友聊天**,不要財經術語、不要一堆數字。讓完全不懂股票的人也秒懂。
+例如:
+- estimate 不要寫「本益比 28 倍偏高」→ 寫「現在這價位算有點貴」
+- dividend 不要寫「殖利率 4.2%」→ 寫「有發股息,還算大方」
+- revenue 不要寫「月增 12% 年增 -5%」→ 寫「生意比上個月好,但比去年差一點」
+- institutional 不要寫「外資買超 3000 張」→ 寫「外資最近一直在買」
+- news → 寫「最近接到大訂單」這種一句話重點
+每句 15~30 字、口語。資料找不到該項就寫「資料不足」+ score 設 0。
 data_date 找不到具體日期就寫今天日期。"""
 
 
@@ -3200,16 +3254,10 @@ def _light_emoji(light: str) -> str:
     return "⚪"   # 空白也當資料不足
 
 
-def _tech_tier(short_light: str, super_short_light: str) -> str:
-    """技術面整體 = 短線 + 超短線:都🟢→🟢、都🔴→🔴、都⚪→⚪、其他→🟡。"""
-    s, ss = _light_emoji(short_light), _light_emoji(super_short_light)
-    if s == "⚪" and ss == "⚪":
-        return "⚪"
-    if s == "🟢" and ss == "🟢":
-        return "🟢"
-    if s == "🔴" and ss == "🔴":
-        return "🔴"
-    return "🟡"
+def _tech_tier(short_light: str, super_short_light: str = "") -> str:
+    """技術面 = 動能燈(短線燈號)本身。動能燈已經是 🟢/🟡/🔴/⚪,直接用。
+    (超短線已不納入判斷,只看動能,避免被 2 天雜訊洗來洗去)"""
+    return _light_emoji(short_light)
 
 
 def _fund_tier(chips_light: str, company_light: str) -> str:
@@ -3274,6 +3322,69 @@ def _what_to_do(short_light: str, super_short_light: str,
     action, reason = table.get((t, f), ("再等等" + ("賣" if is_position else "買"),
                                         "訊號不明、再等等"))
     return f"{action}[{reason}]"
+
+
+def _parse_price(v) -> float | None:
+    s = str(v or "").replace(",", "").replace("$", "").replace("%", "").strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _reached_target_pct(row: dict) -> int:
+    """現價碰到的最高獲利目標(20/15/10/5),沒到任何一個回 0。"""
+    cur = _parse_price(row.get("現價") or row.get("current_price"))
+    if cur is None:
+        return 0
+    for pct, col in ((20, "淨賺20%價"), (15, "淨賺15%價"),
+                     (10, "淨賺10%價"), (5, "淨賺5%價")):
+        p = _parse_price(row.get(col))
+        if p and cur >= p:
+            return pct
+    return 0
+
+
+def _position_advice(row: dict) -> str:
+    """持有股票的「我該做啥」決策表:動能主導、基本面修正、損益決定講法。
+      🟢 有動能 → 抱(讓它跑);基本面爛 → 續抱但別貪
+      🟡 中性   → 抱著等;基本面爛 → 偏減碼
+      🔴 轉弱   → 賣(有賺=獲利了結、虧=停損);基本面也爛 → 更堅決
+    """
+    short = row.get("短線燈號", "")
+    chips = row.get("籌碼面燈號", "")
+    comp = row.get("公司面燈號", "")
+    t = _tech_tier(short)
+    f = _fund_tier(chips, comp)
+    if t == "⚪":
+        return "⏳ 等技術[技術還沒分析,先跑技術面再決定]"
+
+    reached = _reached_target_pct(row)
+    pnl = _parse_price(row.get("損益%"))
+    if reached >= 5:
+        gain = f"已賺 +{reached}%"
+    elif pnl is not None and pnl > 0:
+        gain = f"賺 {pnl:.0f}%"
+    else:
+        gain = ""
+
+    if t == "🟢":   # 有動能 → 抱
+        if f == "🔴":
+            head = f"{gain}、" if gain else ""
+            return f"續抱但別貪[{head}還在漲但公司體質差,到價就分批出別凹]"
+        head = f"{gain}、" if gain else ""
+        return f"續抱[{head}技術還強、還在漲,先抱著別賣太早(想穩可先賣一點)]"
+    if t == "🟡":   # 中性 → 抱著等
+        if f == "🔴":
+            return "偏減碼[沒明顯動能、公司體質又差,可分批先出一些]"
+        return "抱著等[沒明顯動能,先耐心抱著看,別急]"
+    # t == 🔴 轉弱 → 賣
+    extra = "、基本面也差更該走" if f == "🔴" else ""
+    if gain:
+        return f"賣一批[{gain}又技術轉弱{extra},獲利了結落袋]"
+    return f"停損[技術轉弱又在虧{extra},別凹,考慮停損]"
 
 
 def resync_and_fill_names(scope: str = "all") -> dict:
@@ -3389,10 +3500,15 @@ def _recompute_advice(scope: str = "all") -> dict:
     n_pos = n_wl = 0
 
     if do_pos:
-        for sym, lg in _build_existing_lights_map("positions").items():
-            advice = _what_to_do(lg.get("short", ""), lg.get("super_short", ""),
-                                 lg.get("chips", ""), lg.get("company", ""),
-                                 is_position=True)
+        # 讀完整 row(要現價 + 目標價 才能判斷「到價該不該賣」)
+        tab = os.getenv(sheets.POSITIONS_TAB_ENV, sheets.DEFAULT_POSITIONS_TAB)
+        for r in (sheets.fetch_tab(tab) or []):
+            if r.get("_error"):
+                continue
+            sym = str(r.get("代號") or r.get("symbol") or "").replace("'", "").strip()
+            if not sym:
+                continue
+            advice = _position_advice(r)   # 到價+技術 的賣出邏輯
             wb = sheets_writer.upsert_position(
                 symbol=sym, 代號=sym,
                 **{"我該做啥": advice, "綜合建議": advice})
@@ -3526,7 +3642,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
             net = gross - fee - tax
             pnl = net - total_cost
             pnl_pct = (pnl / total_cost * 100) if total_cost else 0
-            short_light = _short_term_light(signals)
+            short_light, _mom_reason = _momentum_light(signals)
             super_light = _super_short_term_light(signals)
             tech_payload = {
                 "現價":         round(price, 2),
@@ -3542,6 +3658,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                 "量能變化":     signals["volume_desc"],
                 "離20天高低":   signals["range20_desc"],
                 "短線燈號":     short_light,
+                "動能原因":     _mom_reason,
                 "超短線燈號":   super_light,
                 "技術整理時間": organized_at,
             }
@@ -3682,7 +3799,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                                  "error": signals.get("error"),
                                  "written": bool(wb.get("ok"))})
                 continue
-            short_light = _short_term_light(signals)
+            short_light, _mom_reason = _momentum_light(signals)
             super_light = _super_short_term_light(signals)
             tech_payload = {
                 "現價":         signals["current_price"],
@@ -3695,6 +3812,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                 "量能變化":     signals["volume_desc"],
                 "離20天高低":   signals["range20_desc"],
                 "短線燈號":     short_light,
+                "動能原因":     _mom_reason,
                 "超短線燈號":   super_light,
                 "技術整理時間": organized_at,
             }
