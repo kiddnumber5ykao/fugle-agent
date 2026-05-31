@@ -2914,8 +2914,8 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
                     "text": _FUNDAMENTALS_SYSTEM_PROMPT,
                     "cache_control": {"type": "ephemeral"},
                 }],
-                # 省錢:web_search 查 2 次(每檔搜尋費砍半,5 項基本面通常還是查得到)
-                tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}],
+                # web_search 查 4 次,基本面查得更深更完整(較貴,但 Tier 2 夠用)
+                tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 4}],
                 messages=[{"role": "user", "content": user_msg}],
             )
             break
