@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 22:41  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
+# 📅 ★最新版★ 上傳於 2026-05-31 23:14  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -3529,8 +3529,21 @@ def resync_and_fill_names(scope: str = "all") -> dict:
     except Exception as e:
         print(f"⚠️ 補股票交易名稱失敗: {e}", flush=True)
 
+    # 6) 順便整理追蹤清單 — 此時股票部位 / 實際損益 已重建,順序保證正確:
+    #    移除已持有的、重複留第一個、把賣光過的補「曾經」。
+    cleaned = {}
+    try:
+        cw = sheets_writer.cleanup_watchlist()
+        if cw.get("ok"):
+            cleaned = {"removedHeld": cw.get("removedHeld", 0),
+                       "removedDup": cw.get("removedDup", 0),
+                       "added曾經": cw.get("added", 0)}
+            print(f"   🧹 追蹤清單整理:{cleaned}", flush=True)
+    except Exception as e:
+        print(f"⚠️ 整理追蹤清單失敗: {e}", flush=True)
+
     return {"ok": True, "watchlist": n_wl, "positions": n_pos,
-            "realized": n_realized, "trades": n_trades}
+            "realized": n_realized, "trades": n_trades, "cleaned": cleaned}
 
 
 def _recompute_advice(scope: str = "all") -> dict:
