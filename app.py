@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 20:54  (原最後更新 2026-05-29)(手機儀表板版)
+# 📅 ★最新版★ 上傳於 2026-05-31 22:41  (原最後更新 2026-05-29)(手機儀表板版)
 """Streamlit chat UI for the Fugle agent.
 
 Run locally:    streamlit run app.py
@@ -538,8 +538,14 @@ if "_view" not in st.session_state:
 
 if st.session_state["_view"] == "儀表板":
     import fugle_agent.dashboard as _dash
+
+    def _cleanup_watchlist():
+        from fugle_agent import sheets_writer as _sw
+        return _sw.cleanup_watchlist()
+
     _dash.render(_trigger_github_workflow, _job_indicator, _mark_job_started,
-                 _cancel_all_running_workflows, _workflow_running)
+                 _cancel_all_running_workflows, _workflow_running,
+                 cleanup_watchlist=_cleanup_watchlist)
     st.divider()
     if st.button("💬 切換到對話", use_container_width=True):
         st.session_state["_view"] = "對話"
