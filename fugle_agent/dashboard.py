@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 23:22  (原最後更新 2026-05-29)(全新)
+# 📅 ★最新版★ 上傳於 2026-05-31 23:57  (原最後更新 2026-05-29)(全新)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -37,6 +37,19 @@ def _tier(light: str) -> str:
     return "⚪"
 
 
+# 基本面燈號顯示成「色 + 詞」,避免一堆同色 🟢 分不清誰是誰
+_FUND_WORD = {"🟢": "好", "🟡": "普通", "🔴": "偏弱", "⚪": "沒分析"}
+
+
+def _fund_light_label(light: str) -> str:
+    s = str(light or "").strip()
+    if not s:
+        return "⚪ 沒分析"
+    base = _tier(s)                       # 收斂成 🟢/🟡/🔴/⚪
+    word = _FUND_WORD.get(base, "")
+    return f"{base} {word}".strip() if word else s
+
+
 def _g(row: dict, *names: str) -> str:
     for n in names:
         v = row.get(n)
@@ -60,7 +73,7 @@ def _action_rank(advice: str) -> tuple:
     → 等分析(4)。同層:賣/減碼 優先於買。
     動作詞:趕快買/趕快賣/停損/先減碼=0;可以買/再等等/留意/偏減碼=1;
             抱緊加碼/續抱*/抱著等=2;不要買/先別買=3;⏳等…=4。"""
-    a = str(advice or "")
+    a = str(advice or "").split("[")[0].strip()   # 只看動作詞,別被[說明]裡的字干擾
     if (a.startswith("趕快") or a.startswith("停損")
             or a.startswith("先減碼") or a.startswith("賣一批")):
         tier = 0
@@ -80,7 +93,7 @@ def _action_rank(advice: str) -> tuple:
 
 
 def _action_emoji(advice: str) -> str:
-    a = str(advice or "")
+    a = str(advice or "").split("[")[0].strip()   # 只看動作詞,別被[說明]裡的賣/買字干擾
     if a.startswith("不要") or a.startswith("先別"):
         return "🟡"
     if "賣" in a or "停損" in a or "減碼" in a:
@@ -89,6 +102,44 @@ def _action_emoji(advice: str) -> str:
         return "🟢"
     if a.startswith("⏳") or "等" in a or a.startswith("留意"):
         return "🟡"
+    return "⚪"
+
+
+def _action_icon(advice: str) -> str:
+    """每個動作詞給一個專屬 icon,讓不同的字一眼就不一樣(只看動作詞,不看說明)。"""
+    a = str(advice or "").split("[")[0].strip()
+    # 賣 / 減碼 側
+    if a.startswith("趕快賣"):
+        return "🔴"
+    if a.startswith("停損"):
+        return "🛑"
+    if a.startswith("先減碼") or a.startswith("偏減碼"):
+        return "✂️"
+    if a.startswith("留意"):
+        return "👀"
+    # 買 側
+    if a.startswith("趕快買") or a.startswith("趕快再買"):
+        return "🚀"
+    if a.startswith("可以買"):
+        return "🟢"
+    if a.startswith("再等等買"):
+        return "🕐"
+    if a.startswith("再等等"):
+        return "⏸️"
+    # 抱 側(抱緊加碼要先判,因為它也 startswith 抱)
+    if a.startswith("抱緊加碼"):
+        return "💪"
+    if a.startswith("抱著等"):
+        return "😴"
+    if a.startswith("續抱") or a.startswith("抱"):
+        return "🤲"
+    # 不買 / 等
+    if a.startswith("不要"):
+        return "🚫"
+    if a.startswith("先別"):
+        return "✋"
+    if a.startswith("⏳") or "等基本面" in a or "等技術" in a:
+        return "⏳"
     return "⚪"
 
 
@@ -154,7 +205,7 @@ def _pill(text: str, kind: str) -> str:
 
 
 def _pill_kind(advice: str) -> str:
-    a = str(advice or "")
+    a = str(advice or "").split("[")[0].strip()   # 只看動作詞
     if a.startswith("不要") or a.startswith("先別"):
         return "gray"
     if "賣" in a or "停損" in a or "減碼" in a:
@@ -162,6 +213,36 @@ def _pill_kind(advice: str) -> str:
     if "買" in a or a.startswith("抱") or a.startswith("續抱"):
         return "success"
     return "gray"
+
+
+# 依「我該做啥」分類的標題(對齊 _action_rank 的 tier)
+_TIER_LABEL = {
+    0: "👉 最該動手",
+    1: "🤔 再看看 / 考慮",
+    2: "😌 抱著就好",
+    3: "🚫 先不用動",
+    4: "⏳ 等資料",
+    5: "其他",
+}
+
+
+def _tier_header(t: int) -> str:
+    return (f'<div style="margin:14px 0 4px;font-weight:600;font-size:13px;'
+            f'color:#5F5E5A">{_TIER_LABEL.get(t, "其他")}</div>')
+
+
+def _render_cards(rows: list[dict], card_fn) -> None:
+    """依 _action_rank 排序 + 分類標題,逐張畫卡片。"""
+    rows.sort(key=lambda r: _action_rank(_g(r, "我該做啥", "綜合建議")))
+    st.markdown('<div class="gyh-card">', unsafe_allow_html=True)
+    last_tier = None
+    for r in rows:
+        t = _action_rank(_g(r, "我該做啥", "綜合建議"))[0]
+        if t != last_tier:
+            st.markdown(_tier_header(t), unsafe_allow_html=True)
+            last_tier = t
+        card_fn(r)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -261,19 +342,7 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     with st.expander("⚙️ 更多"):
         if st.button("🔁 重新整理", use_container_width=True):
             st.rerun()
-        if cleanup_watchlist and st.button(
-                "🧹 整理追蹤清單", use_container_width=True,
-                help="移除已持有的、重複的留第一個、把賣光過的補回來(追蹤理由=曾經)"):
-            with st.spinner("整理中…"):
-                res = cleanup_watchlist()
-            if res.get("ok"):
-                st.success(
-                    f"✅ 已整理:移除持有 {res.get('removedHeld', 0)}、"
-                    f"去重 {res.get('removedDup', 0)}、補曾經 {res.get('added', 0)}")
-            else:
-                st.error(f"❌ {res.get('error')}")
-            st.cache_data.clear()
-            st.rerun()
+        # 追蹤清單整理已自動併進「新交易更新」,不再需要手動按鈕
         if cancel_all and st.button("🛑 終止跑中的更新", use_container_width=True):
             res = cancel_all()
             if res.get("ok"):
@@ -319,12 +388,7 @@ def _render_holdings() -> None:
 
     _what_to_do_summary(rows, is_position=True)
     _last_update_caption(rows)
-
-    rows.sort(key=lambda r: _action_rank(_g(r, "我該做啥", "綜合建議")))
-    st.markdown('<div class="gyh-card">', unsafe_allow_html=True)
-    for r in rows:
-        _holding_card(r)
-    st.markdown('</div>', unsafe_allow_html=True)
+    _render_cards(rows, _holding_card)
 
 
 def _render_watchlist() -> None:
@@ -340,12 +404,7 @@ def _render_watchlist() -> None:
 
     _what_to_do_summary(rows, is_position=False)
     _last_update_caption(rows)
-
-    rows.sort(key=lambda r: _action_rank(_g(r, "我該做啥", "綜合建議")))
-    st.markdown('<div class="gyh-card">', unsafe_allow_html=True)
-    for r in rows:
-        _watch_card(r)
-    st.markdown('</div>', unsafe_allow_html=True)
+    _render_cards(rows, _watch_card)
 
 
 def _what_to_do_summary(rows: list[dict], is_position: bool) -> None:
@@ -353,10 +412,11 @@ def _what_to_do_summary(rows: list[dict], is_position: bool) -> None:
     for r in rows:
         adv = _g(r, "我該做啥", "綜合建議")
         code = _g(r, "代號", "symbol")
-        short = _action_short(adv)
-        if "趕快賣" in adv or "賣一批" in adv:
+        head = _action_short(adv)   # 只看動作詞
+        if (head.startswith("趕快賣") or head.startswith("停損")
+                or head.startswith("先減碼") or head.startswith("賣一批")):
             sell.append(code)
-        elif "趕快買" in adv or "趕快再買" in adv:
+        elif head.startswith("趕快買") or head.startswith("趕快再買"):
             buy.append(code)
     parts = []
     if sell:
@@ -377,7 +437,7 @@ def _holding_card(r: dict) -> None:
     adv = _g(r, "我該做啥", "綜合建議")
     pnl_pct = _num(_g(r, "損益%"))
     pct_txt = f"{pnl_pct:+.1f}%" if pnl_pct is not None else "—"
-    label = f"{_action_emoji(adv)} {_action_short(adv)}　{code} {name}　{pct_txt}"
+    label = f"{_action_icon(adv)} {_action_short(adv)}　{code} {name}　{pct_txt}"
     with st.expander(label):
         _detail_common(r, adv)
         # 目標賣價
@@ -412,7 +472,7 @@ def _watch_card(r: dict) -> None:
     reason = _g(r, "追蹤理由")
     adv = _g(r, "我該做啥", "綜合建議")
     tag = f"（{reason}）" if reason else ""
-    label = f"{_action_emoji(adv)} {_action_short(adv)}　{code} {name}{tag}"
+    label = f"{_action_icon(adv)} {_action_short(adv)}　{code} {name}{tag}"
     with st.expander(label):
         _detail_common(r, adv)
 
@@ -439,18 +499,18 @@ def _detail_common(r: dict, adv: str) -> None:
     # 3) 基本面 — 拆成「公司面」+「籌碼面」兩塊,各自一個燈 + 白話原因
     ft, fs = _rel_time(_g(r, "基本面資料時間"), 60 * 24 * 5)
 
-    def _fund_block(title: str, light: str, items: list[tuple[str, str]]) -> None:
+    def _fund_block(icon: str, title: str, light: str, items: list[tuple[str, str]]) -> None:
         lines = [(k, _g(r, k)) for k in items]
         lines = [(k, v) for k, v in lines if v]
         body = "".join(f'<div style="display:flex;justify-content:space-between;font-size:13px;'
                        f'padding:2px 0"><span style="{mut}">{k}</span><span>{v}</span></div>'
                        for k, v in lines)
-        st.markdown(f'<div style="margin-top:10px">🏢 <b>{title}</b> {light or "—"}</div>'
-                    + body, unsafe_allow_html=True)
+        st.markdown(f'<div style="margin-top:10px">{icon} <b>{title}</b> '
+                    f'{_fund_light_label(light)}</div>' + body, unsafe_allow_html=True)
 
-    _fund_block("公司面", _g(r, "公司面燈號"),
+    _fund_block("🏢", "公司面", _g(r, "公司面燈號"),
                 ["估值", "配息", "營收動能"])
-    _fund_block("籌碼面", _g(r, "籌碼面燈號"),
+    _fund_block("📊", "籌碼面", _g(r, "籌碼面燈號"),
                 ["法人籌碼", "近期新聞重點"])
     st.caption(f"基本面資料 {ft}{' ⚠️舊' if fs else ''}")
     # 4) 我該做啥(最後)
