@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 22:41  (原最後更新 2026-05-29)(全新)
+# 📅 ★最新版★ 上傳於 2026-05-31 22:53  (原最後更新 2026-05-29)(全新)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -186,10 +186,13 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     if workflow_running:
         full_running = workflow_running("full_update.yml", _scope)
         intra_running = workflow_running("intraday_update.yml", _scope)
+        new_running = (workflow_running("full_update.yml", "watchlist_new")
+                       if mode == "追蹤" else False)
     else:
         full_running = "🔄" in job_indicator("full_update")
         intra_running = "🔄" in job_indicator("intraday_update")
-    any_running = full_running or intra_running
+        new_running = False
+    any_running = full_running or intra_running or new_running
     _f = " 🔄" if full_running else ""
     _i = " 🔄" if intra_running else ""
     b1, b2 = st.columns(2)
@@ -215,6 +218,21 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
                 st.rerun()
             else:
                 st.error(f"❌ {r.get('error')}")
+    # ── 只跑新追蹤(只有「追蹤」頁出現)──
+    if mode == "追蹤":
+        _n = " 🔄" if new_running else ""
+        if st.button(f"🆕 只跑新追蹤{_n}",
+                     use_container_width=True, disabled=any_running,
+                     help="只分析追蹤清單裡『還沒分析過』的新代號(技術+基本面),"
+                          "不重跑已分析的,省錢省時"):
+            r = trigger_workflow("full_update.yml", inputs={"scope": "watchlist_new"})
+            if r.get("ok"):
+                mark_job_started("full_update", 900)
+                st.success("✅ 只跑新追蹤已觸發(只分析新代號,背景跑)")
+                st.rerun()
+            else:
+                st.error(f"❌ {r.get('error')}")
+
     if any_running:
         st.caption("⏳ 更新跑中…跑完前按鈕會鎖住,避免重複觸發(可到 sidebar 終止)")
 
