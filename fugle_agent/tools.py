@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 22:06  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
+# 📅 ★最新版★ 上傳於 2026-06-01 23:17  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -3421,30 +3421,30 @@ def _position_advice(row: dict) -> str:
         gain = ""
     head = f"{gain}、" if gain else ""
 
-    if mom == "🔥":       # 強勢 → 抱緊,可加碼
-        if f == "🔴":
-            return f"續抱別加[{head}衝得兇但公司體質差,抱著別追加,到價就分批出]"
+    if mom == "🔥":       # 強勢
         if "過熱" in str(short or ""):
-            return f"續抱[{head}漲很多了,抱著就好、先別追加,等拉回再考慮]"
-        return f"抱緊加碼[{head}動能很強、還在噴,抱緊讓它跑,基本面也行可考慮加碼]"
-    if mom == "🟢":       # 偏多 → 續抱
+            return f"抱著就好[{head}漲很多了,別追高,抱著、等拉回再說]"
         if f == "🔴":
-            return f"續抱但別貪[{head}還在漲但公司體質差,到價就分批出別凹]"
-        return f"續抱[{head}穩穩在漲,先抱著別賣太早(想穩可先賣一點)]"
-    if mom == "🟡":       # 中性 → 抱著等
+            return f"抱著就好[{head}衝得兇但公司體質差,抱著就好、別追加]"
+        return f"可以加碼[{head}還在強勢往上,可以再買一筆讓它跑]"
+    if mom == "🟢":       # 偏多
         if f == "🔴":
-            return "偏減碼[沒明顯動能、公司體質又差,可分批先出一些]"
-        return "抱著等[沒明顯動能,先耐心抱著看,別急]"
-    if mom == "🟠":       # 偏弱 → 先減碼/留意
+            return f"抱著就好[{head}還在漲但公司體質差,先抱著、別貪]"
+        return f"抱著就好[{head}穩穩在漲,先抱著別賣太早]"
+    if mom == "🟡":       # 中性
+        if f == "🔴":
+            return "該賣了[沒動能、公司體質又差,出場吧(之後有機會再買回)]"
+        return "抱著就好[沒明顯動能,先耐心抱著看,別急]"
+    if mom == "🟠":       # 偏弱 → 有賺先落袋、虧就先看緊(不分批)
         extra = "、基本面也差" if f == "🔴" else ""
         if gain:
-            return f"先減碼[{gain}、開始轉弱{extra},先收一些獲利、留意有沒有破底]"
-        return f"留意[開始轉弱{extra}、還沒破底,先看緊一點,破了再走]"
-    # 🔴 弱勢 → 賣
+            return f"該賣了[{gain}、開始轉弱{extra},先獲利了結(之後有機會再買回)]"
+        return f"盯緊一點[開始轉弱{extra}、還沒破底,先看緊,破了就走]"
+    # 🔴 弱勢 → 全賣
     extra = "、基本面也差更該走" if f == "🔴" else ""
     if gain:
-        return f"趕快賣[{gain}又技術明顯轉弱{extra},獲利了結落袋]"
-    return f"停損[技術明顯轉弱又在虧{extra},別凹,考慮停損]"
+        return f"該賣了[{gain}又明顯轉弱{extra},獲利了結]"
+    return f"停損[明顯轉弱又在虧{extra},別凹,考慮停損]"
 
 
 def resync_and_fill_names(scope: str = "all") -> dict:

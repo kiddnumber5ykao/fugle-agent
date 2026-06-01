@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 22:46  (原最後更新 2026-05-29)(全新)
+# 📅 ★最新版★ 上傳於 2026-06-01 23:33  (原最後更新 2026-05-29)(全新)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -301,30 +301,34 @@ def _changes_html() -> tuple[int, str]:
 # 動作詞 → (icon, 白話標籤, 是否「要動手」)。要動手的排最上面,其他收合分組。
 def _plain_action(advice: str) -> tuple[str, str, bool]:
     a = _action_short(advice)
-    if a.startswith("趕快賣") or a.startswith("停損") or a.startswith("該賣") or a.startswith("賣一批"):
+    # 賣:一律全賣(不分批),減碼類也歸這
+    if (a.startswith("趕快賣") or a.startswith("停損") or a.startswith("該賣")
+            or a.startswith("賣一批") or a.startswith("先減碼") or a.startswith("偏減碼")):
         return ("🛑", "該賣了", True)
-    if a.startswith("先減碼") or a.startswith("偏減碼"):
-        return ("✂️", "先賣一些", True)
+    # 加碼:要動手(還在漲,可以再買一筆)
+    if a.startswith("可以加碼") or a.startswith("抱緊加碼"):
+        return ("💪", "可以加碼", True)
+    # 買(追蹤)
     if a.startswith("趕快買"):
         return ("🚀", "可以買", True)
     if a.startswith("可以買"):
         return ("🟢", "可以慢慢買", True)
-    if a.startswith("留意"):
+    # 不用動
+    if a.startswith("盯緊") or a.startswith("留意"):
         return ("👀", "盯緊一點", False)
-    if a.startswith("抱緊加碼"):
-        return ("💪", "抱著、可加碼", False)
     if a.startswith("續抱") or a.startswith("抱"):
         return ("🤲", "抱著就好", False)
     if a.startswith("再等等"):
         return ("⏸️", "再等等", False)
     if a.startswith("先別") or a.startswith("不要"):
         return ("🚫", "先別碰", False)
-    return ("⚪", "還沒分析", False)
+    # 其餘(⏳ 等分析、空白…)
+    return ("⚪", "資料不足", False)
 
 
 # 由上到下的優先序(要動手的在前)
-_PLAIN_ORDER = ["該賣了", "先賣一些", "可以買", "可以慢慢買",
-                "盯緊一點", "抱著、可加碼", "抱著就好", "再等等", "先別碰", "還沒分析"]
+_PLAIN_ORDER = ["該賣了", "可以買", "可以慢慢買", "可以加碼",
+                "盯緊一點", "抱著就好", "再等等", "先別碰", "資料不足"]
 
 
 def _plain_order_key(advice: str) -> int:
@@ -359,7 +363,7 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     </style>""", unsafe_allow_html=True)
 
     # ── 持有/追蹤切換(標題由 app.py 顯示,這裡不重複)──
-    mode = st.radio("檢視", ["我的持股", "我在追蹤"], horizontal=True,
+    mode = st.radio("檢視", ["我的持股", "我的追蹤"], horizontal=True,
                     label_visibility="collapsed", key="dash_mode")
     mode = "持有" if mode == "我的持股" else "追蹤"
 
@@ -401,28 +405,31 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     with st.expander("⚙️ 更新與設定"):
         if any_running:
             st.caption("⏳ 有更新正在跑…跑完前按鈕會鎖住")
-        st.caption("做完什麼,按一下(免費)")
-        cc1, cc2 = st.columns(2)
-        with cc1:
+        # 主要動作:只顯示「當前這一頁」相關的(持股↔我剛買賣股票、追蹤↔我剛加追蹤)
+        if mode == "持有":
+            st.caption("加完股票交易按這個(免費)")
             if st.button("＋ 我剛買賣股票", use_container_width=True, disabled=any_running,
-                         help="加完股票交易按 → 更新持股、賺賠(免費)"):
+                         help="用股票交易重算持股、賺賠;只幫全新股票補公司面"):
                 _after(trigger_workflow("full_update.yml", inputs={"scope": "positions_new"}),
                        "full_update", 900, "已開始更新持股(背景跑)")
-        with cc2:
+        else:
+            st.caption("加完追蹤按這個(免費)")
             if st.button("＋ 我剛加追蹤", use_container_width=True, disabled=any_running,
-                         help="加完追蹤按 → 只分析新加的那幾檔(免費)"):
+                         help="只分析追蹤清單裡新加的那幾檔"):
                 _after(trigger_workflow("full_update.yml", inputs={"scope": "watchlist_new"}),
                        "full_update", 900, "已開始分析新追蹤(背景跑)")
-        st.caption("想馬上看最新(免費)")
-        if st.button("⚡ 馬上更新一下", use_container_width=True, disabled=any_running,
-                     help="不想等自動,現在就刷最新走勢(免費)"):
+
+        st.caption("想立刻看最新股價(免費)")
+        if st.button("⚡ 更新最新股價走勢", use_container_width=True, disabled=any_running,
+                     help="抓最新股價、重算走勢和「該做啥」(免費,不含公司面)"):
             _after(trigger_workflow("intraday_update.yml", inputs={"scope": "all"}),
-                   "intraday_update", 180, "馬上更新已觸發(背景跑)")
-        st.caption("想連公司體質重看(花一點錢,一週一次就好)")
-        if st.button("🔍 重新仔細看(含公司)", use_container_width=True, disabled=any_running,
-                     help="連公司好不好也重查一遍(會花一點錢)"):
+                   "intraday_update", 180, "已開始更新股價走勢(背景跑)")
+
+        st.caption("想連公司基本面重查一遍(花一點錢,一週一次就好)")
+        if st.button("🔍 重查公司基本面", use_container_width=True, disabled=any_running,
+                     help="重查公司估值/配息/營收/法人/新聞(會花一點錢)"):
             _after(trigger_workflow("full_update.yml", inputs={"scope": "all"}),
-                   "full_update", 900, "重新仔細看已觸發(背景跑)")
+                   "full_update", 900, "已開始重查公司基本面(背景跑)")
 
         _repo = os.getenv("GITHUB_REPO", "kiddnumber5ykao/fugle-agent")
         st.markdown(
@@ -483,7 +490,7 @@ def _render_watchlist() -> None:
         st.info("還沒有追蹤 — 在「追蹤清單」加代號,再到 ⚙️ 按「我剛加追蹤」。")
         return
     _last_update_caption(rows)
-    _render_stock_list(rows, _watch_card)
+    _render_stock_list(rows, _watch_card, act_top=False)
 
 
 def _render_totals() -> None:
@@ -492,28 +499,31 @@ def _render_totals() -> None:
         rows = [r for r in (sheets.fetch_tab(tab) or []) if not r.get("_error")]
     except Exception:
         rows = []
-    mv = sum(_num(_g(r, "市值")) or 0 for r in rows)
+    cost = sum(_num(_g(r, "總成本")) or 0 for r in rows)
     pnl = sum(_num(_g(r, "損益")) or 0 for r in rows)
     realized = _realized_total()
     m1, m2, m3 = st.columns(3)
-    m1.metric("總市值", f"{mv:,.0f}")
-    m2.metric("總損益(還沒賣)", f"{pnl:+,.0f}")
-    m3.metric("已實現(賣掉的)", f"{realized:+,.0f}")
+    m1.metric("總成本", f"{cost:,.0f}")
+    m2.metric("未實現損益(還沒賣)", f"{pnl:+,.0f}")
+    m3.metric("已實現損益(賣掉的)", f"{realized:+,.0f}")
 
 
-def _render_stock_list(rows: list[dict], card_fn) -> None:
-    """要動手的股票排最上面、直接展;不用動的、還沒分析的依動作收成一組組。"""
+def _render_stock_list(rows: list[dict], card_fn, act_top: bool = True) -> None:
+    """act_top=True(持股):要動手的排最上面直接展,其餘收合分組。
+    act_top=False(追蹤):全部依動作收成一組組,點開才看(連可以買也收起來)。"""
     rows.sort(key=lambda r: _plain_order_key(_g(r, "我該做啥", "綜合建議")))
-    act = [r for r in rows if _plain_action(_g(r, "我該做啥", "綜合建議"))[2]]
-    rest = [r for r in rows if not _plain_action(_g(r, "我該做啥", "綜合建議"))[2]]
-
-    st.markdown('<div class="gyh-card">', unsafe_allow_html=True)
-    if act:
-        for r in act:
-            card_fn(r)
+    if act_top:
+        act = [r for r in rows if _plain_action(_g(r, "我該做啥", "綜合建議"))[2]]
+        rest = [r for r in rows if not _plain_action(_g(r, "我該做啥", "綜合建議"))[2]]
+        st.markdown('<div class="gyh-card">', unsafe_allow_html=True)
+        if act:
+            for r in act:
+                card_fn(r)
+        else:
+            st.success("今天沒什麼要動手的,放著就好 😌")
+        st.markdown('</div>', unsafe_allow_html=True)
     else:
-        st.success("今天沒什麼要動手的,放著就好 😌")
-    st.markdown('</div>', unsafe_allow_html=True)
+        rest = rows
 
     # 其他依動作詞分組,各自收合(平常不展開)
     order, groups = [], {}
