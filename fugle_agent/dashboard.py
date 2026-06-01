@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 (原最後更新 2026-05-29)(持股頁全收合,該賣的也收成群組)
+# 📅 ★最新版★ 上傳於 2026-06-02 (原最後更新 2026-05-29)(持股頁全收合 + 修 pill 切換字擠出框)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -357,13 +357,15 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     section.main div[data-testid="stVerticalBlock"]{gap:.5rem}
     div[data-testid="stExpander"]{margin-bottom:7px}
 
-    /* 切換鈕(我的持股 / 我在追蹤)→ 膠囊分段樣式 */
+    /* 切換鈕(我的持股 / 我的追蹤)→ 膠囊分段樣式 */
     div[role="radiogroup"]{gap:8px;margin-bottom:6px}
-    div[role="radiogroup"]>label{flex:1;display:flex;justify-content:center;align-items:center;
-        padding:9px 0;border:0.5px solid rgba(127,127,127,.25);border-radius:10px;margin:0!important;cursor:pointer}
+    div[role="radiogroup"]>label{flex:1;min-width:0;display:flex;justify-content:center;align-items:center;
+        padding:9px 6px;border:0.5px solid rgba(127,127,127,.25);border-radius:10px;margin:0!important;cursor:pointer}
     div[role="radiogroup"]>label>div:first-child{display:none}            /* 藏掉圓圈 */
+    div[role="radiogroup"]>label p{font-size:14px!important;margin:0!important;white-space:nowrap}
     div[role="radiogroup"]>label:has(input:checked){background:rgba(127,127,127,.14);
-        border-color:rgba(127,127,127,.6);font-weight:600}
+        border-color:rgba(127,127,127,.6)}
+    div[role="radiogroup"]>label:has(input:checked) p{font-weight:500}
 
     /* 卡片 / 收合區(expander)→ 圓角細邊框、適當內距 */
     div[data-testid="stExpander"] details{border:0.5px solid rgba(127,127,127,.22)!important;
