@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 14:33  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
+# 📅 ★最新版★ 上傳於 2026-06-01 17:11  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -3728,7 +3728,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                 "損益%":        round(pnl_pct, 2),
                 "今天表現":     signals["today_desc"],
                 "最新表現":     signals["today_desc"],
-                "技術資料時間": organized_at,   # 更新當下的時間(含時分秒);K線日期看「最新表現」
+                "技術資料時間": signals.get("latest_date", ""),   # K線最新日期(資料是哪天的)
                 "最近3天":      signals["last3d_desc"],
                 "這週氛圍":     signals["weekly_mood_desc"],
                 "近10天走勢":   signals["ma10_desc"],
@@ -3761,7 +3761,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                     "籌碼面燈號":      chips_light,
                     "公司面燈號":      company_light,
                     "基本面整理時間":   organized_at,
-                    "基本面資料時間":   organized_at,   # 更新當下時間(含時分秒)
+                    "基本面資料時間":   fd.get("data_date", ""),   # 資料日期(新聞/財報多新)
                     "本次花費":         f"${fd.get('cost_usd', 0):.4f}",
                 }
             else:
@@ -3882,7 +3882,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                 "現價":         signals["current_price"],
                 "今天表現":     signals["today_desc"],
                 "最新表現":     signals["today_desc"],
-                "技術資料時間": organized_at,   # 更新當下的時間(含時分秒);K線日期看「最新表現」
+                "技術資料時間": signals.get("latest_date", ""),   # K線最新日期(資料是哪天的)
                 "最近3天":      signals["last3d_desc"],
                 "這週氛圍":     signals["weekly_mood_desc"],
                 "近10天走勢":   signals["ma10_desc"],
@@ -3913,7 +3913,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                     "籌碼面燈號":      chips_light,
                     "公司面燈號":      company_light,
                     "基本面整理時間":   organized_at,
-                    "基本面資料時間":   organized_at,   # 更新當下時間(含時分秒)
+                    "基本面資料時間":   fd.get("data_date", ""),   # 資料日期(新聞/財報多新)
                     "本次花費":         f"${fd.get('cost_usd', 0):.4f}",
                 }
             else:

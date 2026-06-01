@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 14:26  (原最後更新 2026-05-29)(全新)
+# 📅 ★最新版★ 上傳於 2026-06-01 17:11  (原最後更新 2026-05-29)(全新)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -157,10 +157,14 @@ def _action_reason(advice: str) -> str:
 
 
 def _rel_time(ts: str, stale_min: int) -> tuple[str, bool]:
-    """把 'YYYY-MM-DD HH:MM:SS'(台北)轉成『X分前/X小時前/X天前』+ 是否過久。"""
+    """把資料時間轉成易讀字 + 是否過久。
+    這裡的「資料時間」是『資料日期』(YYYY-MM-DD,以天為單位),
+    所以只算到「今天 / 昨天 / X天前」,不算小時(避免把日期當 00:00 亂報幾小時前)。
+    若帶了時分(舊資料)也只取日期部分判斷。"""
     s = str(ts or "").strip()
     if not s:
         return ("尚未更新", True)
+    dt = None
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
         try:
             dt = datetime.datetime.strptime(s[:19], fmt)
@@ -169,17 +173,17 @@ def _rel_time(ts: str, stale_min: int) -> tuple[str, bool]:
             dt = None
     if dt is None:
         return (s, False)
-    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).replace(tzinfo=None)
-    mins = (now - dt).total_seconds() / 60
-    if mins < 0:
-        mins = 0
-    stale = mins > stale_min
-    if mins < 60:
-        txt = f"{int(mins)}分前"
-    elif mins < 60 * 24:
-        txt = f"{int(mins // 60)}小時前"
+    today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).date()
+    days = (today - dt.date()).days
+    if days < 0:
+        days = 0
+    stale = days * 1440 > stale_min
+    if days == 0:
+        txt = "今天"
+    elif days == 1:
+        txt = "昨天"
     else:
-        txt = f"{int(mins // (60 * 24))}天前"
+        txt = f"{days}天前"
     return (txt, stale)
 
 
