@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 📅 ★最新版★ 上傳於 2026-05-31 23:22  (原最後更新 2026-05-29)(全新:單一步驟,給多 job 平行用)
+# 📅 ★最新版★ 上傳於 2026-06-01 22:06  (原最後更新 2026-05-29)(全新:單一步驟,給多 job 平行用)
 """單一步驟入口 — 給 GitHub Actions 多 job 平行跑用。
 
 把「全更新」拆成可平行的步驟,各自一個 job:
@@ -77,7 +77,8 @@ def main() -> None:
 
     os.environ.setdefault("FUGLE_MOCK", "0")
     from fugle_agent.tools import (resync_and_fill_names, organize_all_technical,
-                                   organize_all_deep, _recompute_advice)
+                                   organize_all_deep, _recompute_advice,
+                                   detect_intraday_changes)
 
     t0 = datetime.datetime.now()
     print(f"▶️  步驟 {step}/{scope} 開始 @ {t0.isoformat(timespec='seconds')}")
@@ -118,6 +119,8 @@ def main() -> None:
     elif step == "recompute":
         adv = _recompute_advice(eff_scope)
         print(f"   🧭 部位 {adv.get('positions')} / 追蹤 {adv.get('watchlist')}")
+        # 最後比對「上次的燈」抓今天的變化(免費,純比對)
+        detect_intraday_changes(eff_scope)
 
     dt = (datetime.datetime.now() - t0).total_seconds()
     print(f"✅ 步驟 {step} 完成 @ +{dt:.1f}s")
