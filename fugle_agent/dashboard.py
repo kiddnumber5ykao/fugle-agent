@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 22:28  (原最後更新 2026-05-29)(全新)
+# 📅 ★最新版★ 上傳於 2026-06-01 22:46  (原最後更新 2026-05-29)(全新)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -336,7 +336,26 @@ def _plain_order_key(advice: str) -> int:
 def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
            workflow_running=None, cleanup_watchlist=None) -> None:
     st.markdown("""<style>
-    .gyh-card div[data-testid="stExpander"]{border:0.5px solid rgba(127,127,127,.2);border-radius:12px;margin-bottom:8px}
+    /* 收緊整體上下間距,貼近 mock */
+    section.main div[data-testid="stVerticalBlock"]{gap:.5rem}
+    div[data-testid="stExpander"]{margin-bottom:7px}
+
+    /* 切換鈕(我的持股 / 我在追蹤)→ 膠囊分段樣式 */
+    div[role="radiogroup"]{gap:8px;margin-bottom:6px}
+    div[role="radiogroup"]>label{flex:1;display:flex;justify-content:center;align-items:center;
+        padding:9px 0;border:0.5px solid rgba(127,127,127,.25);border-radius:10px;margin:0!important;cursor:pointer}
+    div[role="radiogroup"]>label>div:first-child{display:none}            /* 藏掉圓圈 */
+    div[role="radiogroup"]>label:has(input:checked){background:rgba(127,127,127,.14);
+        border-color:rgba(127,127,127,.6);font-weight:600}
+
+    /* 卡片 / 收合區(expander)→ 圓角細邊框、適當內距 */
+    div[data-testid="stExpander"] details{border:0.5px solid rgba(127,127,127,.22)!important;
+        border-radius:12px!important;background:rgba(127,127,127,.035);overflow:hidden}
+    div[data-testid="stExpander"] summary{padding:11px 14px!important;font-size:14px!important}
+    div[data-testid="stExpander"] summary:hover{background:rgba(127,127,127,.07)}
+
+    /* 按鈕圓角 */
+    div[data-testid="stButton"]>button{border-radius:10px}
     </style>""", unsafe_allow_html=True)
 
     # ── 持有/追蹤切換(標題由 app.py 顯示,這裡不重複)──
