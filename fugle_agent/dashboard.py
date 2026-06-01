@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 22:06  (原最後更新 2026-05-29)(全新)
+# 📅 ★最新版★ 上傳於 2026-06-01 22:28  (原最後更新 2026-05-29)(全新)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -339,13 +339,10 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     .gyh-card div[data-testid="stExpander"]{border:0.5px solid rgba(127,127,127,.2);border-radius:12px;margin-bottom:8px}
     </style>""", unsafe_allow_html=True)
 
-    # ── 標題 + 持有/追蹤切換 ──
-    c1, c2 = st.columns([1, 1])
-    with c1:
-        st.markdown("### 加油好嗎？")
-    with c2:
-        mode = st.radio("檢視", ["持有", "追蹤"], horizontal=True,
-                        label_visibility="collapsed", key="dash_mode")
+    # ── 持有/追蹤切換(標題由 app.py 顯示,這裡不重複)──
+    mode = st.radio("檢視", ["我的持股", "我在追蹤"], horizontal=True,
+                    label_visibility="collapsed", key="dash_mode")
+    mode = "持有" if mode == "我的持股" else "追蹤"
 
     # 跑中狀態(鎖按鈕用)
     if workflow_running:
