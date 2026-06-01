@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 20:54  (原最後更新 2026-05-29)(多 job:重算→技術→重算我該做啥)
+# 📅 ★最新版★ 上傳於 2026-06-01 14:33  (原最後更新 2026-05-29)(多 job:重算→技術→重算我該做啥)
 name: 盤中更新 (重算+技術)
 run-name: 盤中更新 [${{ inputs.scope || 'all' }}]
 
@@ -10,6 +10,10 @@ on:
         type: string
         required: false
         default: all
+  schedule:
+    # 台股開盤 9:00–13:30(台北)= UTC 01:00–05:30,每 30 分自動跑盤中更新
+    # (只更新技術面 + 我該做啥,免費,不花 AI 錢)。排程觸發時 scope 預設 all。
+    - cron: "*/30 1-5 * * 1-5"
 
 env:
   ANTHROPIC_API_KEY:        ${{ secrets.ANTHROPIC_API_KEY }}
