@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 23:33  (原最後更新 2026-05-29)(全新)
+# 📅 ★最新版★ 上傳於 2026-06-02 (原最後更新 2026-05-29)(持股頁全收合,該賣的也收成群組)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -305,9 +305,9 @@ def _plain_action(advice: str) -> tuple[str, str, bool]:
     if (a.startswith("趕快賣") or a.startswith("停損") or a.startswith("該賣")
             or a.startswith("賣一批") or a.startswith("先減碼") or a.startswith("偏減碼")):
         return ("🛑", "該賣了", True)
-    # 加碼:要動手(還在漲,可以再買一筆)
+    # 加碼:收成一組(不急,點開看)
     if a.startswith("可以加碼") or a.startswith("抱緊加碼"):
-        return ("💪", "可以加碼", True)
+        return ("💪", "可以加碼", False)
     # 買(追蹤)
     if a.startswith("趕快買"):
         return ("🚀", "可以買", True)
@@ -329,6 +329,19 @@ def _plain_action(advice: str) -> tuple[str, str, bool]:
 # 由上到下的優先序(要動手的在前)
 _PLAIN_ORDER = ["該賣了", "可以買", "可以慢慢買", "可以加碼",
                 "盯緊一點", "抱著就好", "再等等", "先別碰", "資料不足"]
+
+# 收合群組標題用的白話講法(個股卡片內仍用上面的短詞)
+_GROUP_TITLE = {
+    "該賣了":   "今天該賣的",
+    "可以加碼": "還能再買一點的",
+    "盯緊一點": "要盯緊的",
+    "抱著就好": "抱著就好的",
+    "可以買":   "可以買的",
+    "可以慢慢買": "可以慢慢買的",
+    "再等等":   "再等等的",
+    "先別碰":   "先別碰的",
+    "資料不足": "資料不足",
+}
 
 
 def _plain_order_key(advice: str) -> int:
@@ -476,7 +489,7 @@ def _render_holdings() -> None:
         st.info("還沒有持股 — 在「股票交易」加交易,再到 ⚙️ 按「我剛買賣股票」。")
         return
     _last_update_caption(rows)
-    _render_stock_list(rows, _holding_card)
+    _render_stock_list(rows, _holding_card, act_top=False)
 
 
 def _render_watchlist() -> None:
@@ -536,7 +549,8 @@ def _render_stock_list(rows: list[dict], card_fn, act_top: bool = True) -> None:
         groups[_plain_action(_g(r, "我該做啥", "綜合建議"))[1]].append(r)
     for lab in order:
         icon = _plain_action(_g(groups[lab][0], "我該做啥", "綜合建議"))[0]
-        with st.expander(f"{icon} {lab}的（{len(groups[lab])} 檔）"):
+        title = _GROUP_TITLE.get(lab, f"{lab}的")
+        with st.expander(f"{icon} {title}（{len(groups[lab])} 檔）"):
             st.markdown('<div class="gyh-card">', unsafe_allow_html=True)
             for r in groups[lab]:
                 card_fn(r)
