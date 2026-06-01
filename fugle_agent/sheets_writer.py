@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 14:33  (原最後更新 2026-05-29)(加 backfill_realized_names)
+# 📅 ★最新版★ 上傳於 2026-06-01 22:06  (原最後更新 2026-05-29)(加 backfill_realized_names)
 """POST helper for the Apps Script Web App that writes to the user's
 '加油好嗎' Google Sheet.
 
@@ -125,6 +125,29 @@ def cleanup_watchlist(timeout: int = 60) -> dict:
 def sort_watchlist(timeout: int = 30) -> dict:
     """把「追蹤清單」資料列照『追蹤理由』排序(同理由排一起)。"""
     return _post("sort_watchlist", {}, timeout=timeout)
+
+
+# ---- 盤中變化提醒 ----
+
+def log_changes(changes: list[dict], timeout: int = 30) -> dict:
+    """記一批「今天的變化」到隱藏分頁(只留今天)。
+    changes = [{time, scope, symbol, name, dir, msg}, ...]"""
+    return _post("log_changes", {"changes": changes}, timeout=timeout)
+
+
+def get_changes_today(timeout: int = 20) -> dict:
+    """讀今天的變化清單。回傳 {ok, changes: [...]}"""
+    return _post("get_changes_today", {}, timeout=timeout)
+
+
+def save_snapshot(snapshot: str, timeout: int = 20) -> dict:
+    """存燈號快照(JSON 字串),給下次比對變化用。"""
+    return _post("save_snapshot", {"snapshot": snapshot}, timeout=timeout)
+
+
+def load_snapshot(timeout: int = 20) -> dict:
+    """讀上次的燈號快照。回傳 {ok, snapshot: '...'}"""
+    return _post("load_snapshot", {}, timeout=timeout)
 
 
 def backfill_trade_names(names: dict[str, str], timeout: int = 60) -> dict:

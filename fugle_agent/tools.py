@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 17:11  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
+# 📅 ★最新版★ 上傳於 2026-06-01 22:06  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -3606,6 +3606,84 @@ def _recompute_advice(scope: str = "all") -> dict:
     return {"positions": n_pos, "watchlist": n_wl}
 
 
+# ---------------------------------------------------------------------------
+# 🔔 盤中變化提醒 — 跟「上次的燈號快照」比對,翻燈就記成「今天的變化」
+# ---------------------------------------------------------------------------
+_MOM_RANK = {"🔥": 2, "🟢": 1, "🟡": 0, "🟠": -1, "🔴": -2}
+
+
+def _change_msg(old_e: str, new_e: str, is_pos: bool) -> tuple[str, str] | None:
+    """比較舊→新動能等級,回 (方向, 白話訊息);沒有有意義的變化回 None。"""
+    o, n = _MOM_RANK.get(old_e), _MOM_RANK.get(new_e)
+    if o is None or n is None or o == n:
+        return None
+    if n > o:   # 變強 → 買方向
+        if is_pos:
+            return ("買", "越漲越有勁了,抱著的續抱,想加碼也行")
+        return ("買", "開始漲起來了,想買的可以看一下")
+    # 變弱 → 賣方向
+    if is_pos:
+        return ("賣", "開始軟掉了,手上有的要當心,可能要準備跑")
+    return ("賣", "走勢轉弱了,想買的先別急")
+
+
+def detect_intraday_changes(scope: str = "all") -> dict:
+    """跟上次燈號快照比對,把翻燈的記成「今天的變化」(存隱藏分頁)。
+    每次更新的最後跑一次。免費(純比對,不打 AI)。"""
+    do_pos = scope in ("all", "positions", "positions_new")
+    do_wl = scope in ("all", "watchlist", "watchlist_new")
+
+    prev: dict[str, str] = {}
+    try:
+        r = sheets_writer.load_snapshot()
+        if r.get("ok") and r.get("snapshot"):
+            prev = json.loads(r["snapshot"]) or {}
+    except Exception:
+        prev = {}
+
+    cur: dict[str, str] = {}
+    changes: list[dict] = []
+    now = _now_tw_str()
+
+    def _scan(rows, is_pos):
+        for row in (rows or []):
+            if row.get("_error"):
+                continue
+            sym = str(row.get("代號") or row.get("symbol") or "").replace("'", "").strip()
+            if not sym:
+                continue
+            name = str(row.get("名稱") or row.get("name") or "").strip()
+            new_e = _mom_level(row.get("短線燈號") or "")
+            cur[sym] = new_e
+            old_e = prev.get(sym)
+            if old_e and old_e != "⚪" and new_e != "⚪":
+                res = _change_msg(old_e, new_e, is_pos)
+                if res:
+                    changes.append({"time": now, "scope": "持有" if is_pos else "追蹤",
+                                    "symbol": sym, "name": name, "dir": res[0], "msg": res[1]})
+
+    try:
+        if do_pos:
+            tab = os.getenv(sheets.POSITIONS_TAB_ENV, sheets.DEFAULT_POSITIONS_TAB)
+            _scan(sheets.fetch_tab(tab), True)
+        if do_wl:
+            _scan(sheets.load_watchlist(), False)
+    except Exception as e:
+        print(f"⚠️ 偵測變化讀取失敗: {e}", flush=True)
+        return {"ok": False, "error": str(e)}
+
+    merged = dict(prev)
+    merged.update(cur)   # 只更新這次掃到的 scope,另一邊的快照保留
+    try:
+        if changes:
+            sheets_writer.log_changes(changes)
+        sheets_writer.save_snapshot(json.dumps(merged, ensure_ascii=False))
+    except Exception as e:
+        print(f"⚠️ 寫入變化/快照失敗: {e}", flush=True)
+    print(f"   🔔 偵測到 {len(changes)} 個變化", flush=True)
+    return {"ok": True, "changes": len(changes)}
+
+
 def _build_existing_lights_map(source: str) -> dict[str, dict]:
     """從 Sheet 讀現有的 4 個燈號 — 用於「只跑一邊時讓綜合建議仍能算對」。
     source = 'positions' 或 'watchlist'。"""
@@ -3728,7 +3806,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                 "損益%":        round(pnl_pct, 2),
                 "今天表現":     signals["today_desc"],
                 "最新表現":     signals["today_desc"],
-                "技術資料時間": signals.get("latest_date", ""),   # K線最新日期(資料是哪天的)
+                "技術資料時間": organized_at,   # 你上次更新的時間(到秒);K線是哪天的看「最新表現」
                 "最近3天":      signals["last3d_desc"],
                 "這週氛圍":     signals["weekly_mood_desc"],
                 "近10天走勢":   signals["ma10_desc"],
@@ -3761,7 +3839,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                     "籌碼面燈號":      chips_light,
                     "公司面燈號":      company_light,
                     "基本面整理時間":   organized_at,
-                    "基本面資料時間":   fd.get("data_date", ""),   # 資料日期(新聞/財報多新)
+                    "基本面資料時間":   organized_at,   # 你上次更新的時間(到秒)
                     "本次花費":         f"${fd.get('cost_usd', 0):.4f}",
                 }
             else:
@@ -3882,7 +3960,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                 "現價":         signals["current_price"],
                 "今天表現":     signals["today_desc"],
                 "最新表現":     signals["today_desc"],
-                "技術資料時間": signals.get("latest_date", ""),   # K線最新日期(資料是哪天的)
+                "技術資料時間": organized_at,   # 你上次更新的時間(到秒);K線是哪天的看「最新表現」
                 "最近3天":      signals["last3d_desc"],
                 "這週氛圍":     signals["weekly_mood_desc"],
                 "近10天走勢":   signals["ma10_desc"],
@@ -3913,7 +3991,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                     "籌碼面燈號":      chips_light,
                     "公司面燈號":      company_light,
                     "基本面整理時間":   organized_at,
-                    "基本面資料時間":   fd.get("data_date", ""),   # 資料日期(新聞/財報多新)
+                    "基本面資料時間":   organized_at,   # 你上次更新的時間(到秒)
                     "本次花費":         f"${fd.get('cost_usd', 0):.4f}",
                 }
             else:

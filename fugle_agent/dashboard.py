@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 17:11  (原最後更新 2026-05-29)(全新)
+# 📅 ★最新版★ 上傳於 2026-06-01 22:06  (原最後更新 2026-05-29)(全新)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -157,10 +157,9 @@ def _action_reason(advice: str) -> str:
 
 
 def _rel_time(ts: str, stale_min: int) -> tuple[str, bool]:
-    """把資料時間轉成易讀字 + 是否過久。
-    這裡的「資料時間」是『資料日期』(YYYY-MM-DD,以天為單位),
-    所以只算到「今天 / 昨天 / X天前」,不算小時(避免把日期當 00:00 亂報幾小時前)。
-    若帶了時分(舊資料)也只取日期部分判斷。"""
+    """把『更新時間』(YYYY-MM-DD HH:MM:SS,台北)轉成
+    『剛剛 / X分前 / X小時前 / X天前』+ 是否過久。
+    只有日期(舊資料、沒時分)時,當天 00:00 算。"""
     s = str(ts or "").strip()
     if not s:
         return ("尚未更新", True)
@@ -173,17 +172,19 @@ def _rel_time(ts: str, stale_min: int) -> tuple[str, bool]:
             dt = None
     if dt is None:
         return (s, False)
-    today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).date()
-    days = (today - dt.date()).days
-    if days < 0:
-        days = 0
-    stale = days * 1440 > stale_min
-    if days == 0:
-        txt = "今天"
-    elif days == 1:
-        txt = "昨天"
+    now = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).replace(tzinfo=None)
+    mins = (now - dt).total_seconds() / 60
+    if mins < 0:
+        mins = 0
+    stale = mins > stale_min
+    if mins < 1:
+        txt = "剛剛"
+    elif mins < 60:
+        txt = f"{int(mins)}分前"
+    elif mins < 60 * 24:
+        txt = f"{int(mins // 60)}小時前"
     else:
-        txt = f"{days}天前"
+        txt = f"{int(mins // (60 * 24))}天前"
     return (txt, stale)
 
 
@@ -257,6 +258,80 @@ def _render_cards(rows: list[dict], card_fn) -> None:
     st.markdown('</div>', unsafe_allow_html=True)
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_today_changes() -> list[dict]:
+    try:
+        from fugle_agent import sheets_writer as _sw
+        r = _sw.get_changes_today()
+        return r.get("changes", []) if r.get("ok") else []
+    except Exception:
+        return []
+
+
+def _changes_html() -> tuple[int, str]:
+    """回 (今天變化筆數, 內容 HTML) — 給「👀 今天要注意的」收合區用。"""
+    changes = _load_today_changes()
+    groups = [
+        ("買", "🟢 開始有起色的", "#639922"),
+        ("賣", "🔴 開始轉壞的", "#E24B4A"),
+        ("看", "🟡 量有異常的", "#BA7517"),
+    ]
+    body = ""
+    for key, title, color in groups:
+        items = [c for c in changes if (c.get("dir") or "看") == key]
+        if not items:
+            continue
+        body += (f'<div style="display:flex;align-items:center;gap:6px;margin:10px 0 4px">'
+                 f'<span style="width:9px;height:9px;border-radius:50%;background:{color};'
+                 f'display:inline-block"></span><span style="font-size:13px;font-weight:500;'
+                 f'color:{color}">{title}</span></div>')
+        for c in items:
+            t = str(c.get("time") or "")[11:16]
+            body += (f'<div style="border-top:0.5px solid rgba(127,127,127,.2);display:flex;'
+                     f'justify-content:space-between;gap:10px;padding:7px 0">'
+                     f'<div><div style="font-size:14px;font-weight:500">{c.get("symbol","")} '
+                     f'{c.get("name","")}</div><div style="font-size:13px;color:#7d7d7d;'
+                     f'line-height:1.5">{c.get("msg","")}</div></div>'
+                     f'<span style="font-size:12px;color:#9a9a9a;white-space:nowrap">{t}</span></div>')
+    if not body:
+        body = '<div style="font-size:13px;color:#7d7d7d;padding:4px 0">今天還沒什麼動靜 😌</div>'
+    return (len(changes), body)
+
+
+# 動作詞 → (icon, 白話標籤, 是否「要動手」)。要動手的排最上面,其他收合分組。
+def _plain_action(advice: str) -> tuple[str, str, bool]:
+    a = _action_short(advice)
+    if a.startswith("趕快賣") or a.startswith("停損") or a.startswith("該賣") or a.startswith("賣一批"):
+        return ("🛑", "該賣了", True)
+    if a.startswith("先減碼") or a.startswith("偏減碼"):
+        return ("✂️", "先賣一些", True)
+    if a.startswith("趕快買"):
+        return ("🚀", "可以買", True)
+    if a.startswith("可以買"):
+        return ("🟢", "可以慢慢買", True)
+    if a.startswith("留意"):
+        return ("👀", "盯緊一點", False)
+    if a.startswith("抱緊加碼"):
+        return ("💪", "抱著、可加碼", False)
+    if a.startswith("續抱") or a.startswith("抱"):
+        return ("🤲", "抱著就好", False)
+    if a.startswith("再等等"):
+        return ("⏸️", "再等等", False)
+    if a.startswith("先別") or a.startswith("不要"):
+        return ("🚫", "先別碰", False)
+    return ("⚪", "還沒分析", False)
+
+
+# 由上到下的優先序(要動手的在前)
+_PLAIN_ORDER = ["該賣了", "先賣一些", "可以買", "可以慢慢買",
+                "盯緊一點", "抱著、可加碼", "抱著就好", "再等等", "先別碰", "還沒分析"]
+
+
+def _plain_order_key(advice: str) -> int:
+    lab = _plain_action(advice)[1]
+    return _PLAIN_ORDER.index(lab) if lab in _PLAIN_ORDER else 99
+
+
 # ---------------------------------------------------------------------------
 def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
            workflow_running=None, cleanup_watchlist=None) -> None:
@@ -272,103 +347,86 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
         mode = st.radio("檢視", ["持有", "追蹤"], horizontal=True,
                         label_visibility="collapsed", key="dash_mode")
 
-    # 只更新「你現在看的」那一邊:持有→positions、追蹤→watchlist
-    _scope = "positions" if mode == "持有" else "watchlist"
-    _scope_zh = "股票部位" if mode == "持有" else "追蹤清單"
-    # ── 按鈕狀態(只鎖「這個 scope」在跑的,另一邊不受影響)──
-    # 主要動作:持有=新交易更新(positions_new)、追蹤=新追蹤更新(watchlist_new)
-    _new_scope = "positions_new" if mode == "持有" else "watchlist_new"
+    # 跑中狀態(鎖按鈕用)
     if workflow_running:
-        full_running = workflow_running("full_update.yml", _scope)
-        intra_running = workflow_running("intraday_update.yml", _scope)
-        new_running = workflow_running("full_update.yml", _new_scope)
+        full_running = workflow_running("full_update.yml", "all")
+        intra_running = workflow_running("intraday_update.yml", "all")
+        pos_running = workflow_running("full_update.yml", "positions_new")
+        wl_running = workflow_running("full_update.yml", "watchlist_new")
     else:
-        full_running = "🔄" in job_indicator("full_update")
-        intra_running = "🔄" in job_indicator("intraday_update")
-        new_running = False
-    any_running = full_running or intra_running or new_running
-    _f = " 🔄" if full_running else ""
-    _i = " 🔄" if intra_running else ""
-    _n = " 🔄" if new_running else ""
+        full_running = intra_running = pos_running = wl_running = False
+    any_running = full_running or intra_running or pos_running or wl_running
 
-    # ── 主要動作按鈕(依你做了什麼)──
-    if mode == "持有":
-        if st.button(f"🆕 新交易更新{_n}",
-                     use_container_width=True, disabled=any_running,
-                     help="加完買賣交易就按這個:重算部位/損益/實際損益、整理追蹤清單、"
-                          "刷新所有持股股價,並只幫『全新沒分析過的股票』補基本面(省錢)"):
-            r = trigger_workflow("full_update.yml", inputs={"scope": "positions_new"})
-            if r.get("ok"):
-                mark_job_started("full_update", 900)
-                st.success("✅ 新交易更新已觸發(背景跑)")
-                st.rerun()
-            else:
-                st.error(f"❌ {r.get('error')}")
-    else:  # 追蹤
-        if st.button(f"🆕 新追蹤更新{_n}",
-                     use_container_width=True, disabled=any_running,
-                     help="加完追蹤就按這個:只分析追蹤清單裡『還沒分析過』的新代號,"
-                          "不重跑已分析的,省錢省時"):
-            r = trigger_workflow("full_update.yml", inputs={"scope": "watchlist_new"})
-            if r.get("ok"):
-                mark_job_started("full_update", 900)
-                st.success("✅ 新追蹤更新已觸發(只分析新代號,背景跑)")
-                st.rerun()
-            else:
-                st.error(f"❌ {r.get('error')}")
-
-    # ── 全更新 / 盤中更新(進階:重跑全部)──
-    b1, b2 = st.columns(2)
-    with b1:
-        if st.button(f"🔄 全更新{_f}",
-                     use_container_width=True, disabled=any_running,
-                     help=f"把「{_scope_zh}」全部重新深入分析一遍(含基本面,慢、較花錢)"):
-            r = trigger_workflow("full_update.yml", inputs={"scope": _scope})
-            if r.get("ok"):
-                mark_job_started("full_update", 900)
-                st.success(f"✅ 全更新已觸發(只跑{_scope_zh},背景跑)")
-                st.rerun()
-            else:
-                st.error(f"❌ {r.get('error')}")
-    with b2:
-        if st.button(f"⚡ 盤中更新{_i}",
-                     use_container_width=True, disabled=any_running,
-                     help=f"「{_scope_zh}」只刷股價/動能 + 我該做啥(跳過基本面,快、免費)"):
-            r = trigger_workflow("intraday_update.yml", inputs={"scope": _scope})
-            if r.get("ok"):
-                mark_job_started("intraday_update", 180)
-                st.success(f"✅ 盤中更新已觸發(只跑{_scope_zh},背景跑)")
-                st.rerun()
-            else:
-                st.error(f"❌ {r.get('error')}")
-
-    if any_running:
-        st.caption("⏳ 更新跑中…跑完前按鈕會鎖住,避免重複觸發(可到「更多」終止)")
-
+    # ── 主畫面:每檔股票一張卡,要動手的在最上面 ──
     if mode == "持有":
         _render_holdings()
     else:
         _render_watchlist()
 
-    # ── 更多(收起來)──
-    with st.expander("⚙️ 更多"):
-        if st.button("🔁 重新整理", use_container_width=True):
+    # ── 👀 今天要注意的(收合)──
+    _ncnt, _cbody = _changes_html()
+    with st.expander(f"👀 今天要注意的（{_ncnt}）" if _ncnt else "👀 今天要注意的"):
+        st.markdown(_cbody, unsafe_allow_html=True)
+
+    # ── 💰 我現在賺多少(只有持股,收合)──
+    if mode == "持有":
+        with st.expander("💰 我現在賺多少"):
+            _render_totals()
+
+    # ── ⚙️ 更新與設定(按鈕都收這)──
+    def _after(r, key, secs, ok_msg):
+        if r.get("ok"):
+            mark_job_started(key, secs)
+            st.success(f"✅ {ok_msg}")
             st.rerun()
+        else:
+            st.error(f"❌ {r.get('error')}")
+
+    with st.expander("⚙️ 更新與設定"):
+        if any_running:
+            st.caption("⏳ 有更新正在跑…跑完前按鈕會鎖住")
+        st.caption("做完什麼,按一下(免費)")
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            if st.button("＋ 我剛買賣股票", use_container_width=True, disabled=any_running,
+                         help="加完股票交易按 → 更新持股、賺賠(免費)"):
+                _after(trigger_workflow("full_update.yml", inputs={"scope": "positions_new"}),
+                       "full_update", 900, "已開始更新持股(背景跑)")
+        with cc2:
+            if st.button("＋ 我剛加追蹤", use_container_width=True, disabled=any_running,
+                         help="加完追蹤按 → 只分析新加的那幾檔(免費)"):
+                _after(trigger_workflow("full_update.yml", inputs={"scope": "watchlist_new"}),
+                       "full_update", 900, "已開始分析新追蹤(背景跑)")
+        st.caption("想馬上看最新(免費)")
+        if st.button("⚡ 馬上更新一下", use_container_width=True, disabled=any_running,
+                     help="不想等自動,現在就刷最新走勢(免費)"):
+            _after(trigger_workflow("intraday_update.yml", inputs={"scope": "all"}),
+                   "intraday_update", 180, "馬上更新已觸發(背景跑)")
+        st.caption("想連公司體質重看(花一點錢,一週一次就好)")
+        if st.button("🔍 重新仔細看(含公司)", use_container_width=True, disabled=any_running,
+                     help="連公司好不好也重查一遍(會花一點錢)"):
+            _after(trigger_workflow("full_update.yml", inputs={"scope": "all"}),
+                   "full_update", 900, "重新仔細看已觸發(背景跑)")
+
         _repo = os.getenv("GITHUB_REPO", "kiddnumber5ykao/fugle-agent")
         st.markdown(
             f'<a href="https://github.com/{_repo}/actions" target="_blank" '
             f'style="display:block;text-align:center;padding:8px;border:0.5px solid '
-            f'rgba(127,127,127,.3);border-radius:8px;text-decoration:none;margin:4px 0">'
-            f'📊 看更新跑的狀況(GitHub Actions)</a>', unsafe_allow_html=True)
-        # 追蹤清單整理已自動併進「新交易更新」,不再需要手動按鈕
-        if cancel_all and st.button("🛑 終止跑中的更新", use_container_width=True):
-            res = cancel_all()
-            if res.get("ok"):
-                n = res.get("n_cancelled", 0)
-                st.success(f"✅ 已取消 {n} 個" if n else "沒有跑中的")
-            else:
-                st.error(f"❌ {res.get('error')}")
-            st.rerun()
+            f'rgba(127,127,127,.3);border-radius:8px;text-decoration:none;margin:8px 0 4px">'
+            f'📊 看更新狀況</a>', unsafe_allow_html=True)
+        t1, t2 = st.columns(2)
+        with t1:
+            if st.button("🔁 重新整理", use_container_width=True):
+                st.cache_data.clear()
+                st.rerun()
+        with t2:
+            if cancel_all and st.button("🛑 終止跑中", use_container_width=True):
+                res = cancel_all()
+                if res.get("ok"):
+                    st.success(f"✅ 已取消 {res.get('n_cancelled', 0)} 個")
+                else:
+                    st.error(f"❌ {res.get('error')}")
+                st.rerun()
 
 
 def _last_update_caption(rows: list[dict]) -> None:
@@ -392,21 +450,10 @@ def _render_holdings() -> None:
         st.error(f"讀股票部位失敗:{e}")
         return
     if not rows:
-        st.info("股票部位是空的 — 先在「股票交易」加交易,再按全更新。")
+        st.info("還沒有持股 — 在「股票交易」加交易,再到 ⚙️ 按「我剛買賣股票」。")
         return
-
-    # 總額
-    mv = sum(_num(_g(r, "市值")) or 0 for r in rows)
-    pnl = sum(_num(_g(r, "損益")) or 0 for r in rows)
-    realized = _realized_total()
-    m1, m2, m3 = st.columns(3)
-    m1.metric("總市值", f"{mv:,.0f}")
-    m2.metric("總損益", f"{pnl:+,.0f}")
-    m3.metric("已實現", f"{realized:+,.0f}")
-
-    _what_to_do_summary(rows, is_position=True)
     _last_update_caption(rows)
-    _render_cards(rows, _holding_card)
+    _render_stock_list(rows, _holding_card)
 
 
 def _render_watchlist() -> None:
@@ -417,45 +464,67 @@ def _render_watchlist() -> None:
         st.error(f"讀追蹤清單失敗:{e}")
         return
     if not rows:
-        st.info("追蹤清單是空的。")
+        st.info("還沒有追蹤 — 在「追蹤清單」加代號,再到 ⚙️ 按「我剛加追蹤」。")
         return
-
-    _what_to_do_summary(rows, is_position=False)
     _last_update_caption(rows)
-    _render_cards(rows, _watch_card)
+    _render_stock_list(rows, _watch_card)
 
 
-def _what_to_do_summary(rows: list[dict], is_position: bool) -> None:
-    sell, buy, hit = [], [], []
-    for r in rows:
-        adv = _g(r, "我該做啥", "綜合建議")
-        code = _g(r, "代號", "symbol")
-        head = _action_short(adv)   # 只看動作詞
-        if (head.startswith("趕快賣") or head.startswith("停損")
-                or head.startswith("先減碼") or head.startswith("賣一批")):
-            sell.append(code)
-        elif head.startswith("趕快買") or head.startswith("趕快再買"):
-            buy.append(code)
-    parts = []
-    if sell:
-        parts.append(_pill("該賣", "danger") + " " + "、".join(sell))
-    if buy:
-        parts.append(_pill("趕快買", "success") + " " + "、".join(buy))
-    if not parts:
-        parts.append('<span style="color:#5F5E5A">目前沒有要趕快動的</span>')
-    html = ('<div style="border:0.5px solid rgba(127,127,127,.3);border-radius:12px;'
-            'padding:10px 12px;margin:6px 0 4px"><b>⚠️ 該做什麼</b><br>'
-            + '<br>'.join(parts) + '</div>')
-    st.markdown(html, unsafe_allow_html=True)
+def _render_totals() -> None:
+    tab = os.getenv("PORTFOLIO_POSITIONS_TAB", sheets.DEFAULT_POSITIONS_TAB)
+    try:
+        rows = [r for r in (sheets.fetch_tab(tab) or []) if not r.get("_error")]
+    except Exception:
+        rows = []
+    mv = sum(_num(_g(r, "市值")) or 0 for r in rows)
+    pnl = sum(_num(_g(r, "損益")) or 0 for r in rows)
+    realized = _realized_total()
+    m1, m2, m3 = st.columns(3)
+    m1.metric("總市值", f"{mv:,.0f}")
+    m2.metric("總損益(還沒賣)", f"{pnl:+,.0f}")
+    m3.metric("已實現(賣掉的)", f"{realized:+,.0f}")
+
+
+def _render_stock_list(rows: list[dict], card_fn) -> None:
+    """要動手的股票排最上面、直接展;不用動的、還沒分析的依動作收成一組組。"""
+    rows.sort(key=lambda r: _plain_order_key(_g(r, "我該做啥", "綜合建議")))
+    act = [r for r in rows if _plain_action(_g(r, "我該做啥", "綜合建議"))[2]]
+    rest = [r for r in rows if not _plain_action(_g(r, "我該做啥", "綜合建議"))[2]]
+
+    st.markdown('<div class="gyh-card">', unsafe_allow_html=True)
+    if act:
+        for r in act:
+            card_fn(r)
+    else:
+        st.success("今天沒什麼要動手的,放著就好 😌")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # 其他依動作詞分組,各自收合(平常不展開)
+    order, groups = [], {}
+    for r in rest:
+        lab = _plain_action(_g(r, "我該做啥", "綜合建議"))[1]
+        if lab not in groups:
+            groups[lab] = []
+            order.append(lab)
+    for r in rest:
+        groups[_plain_action(_g(r, "我該做啥", "綜合建議"))[1]].append(r)
+    for lab in order:
+        icon = _plain_action(_g(groups[lab][0], "我該做啥", "綜合建議"))[0]
+        with st.expander(f"{icon} {lab}的（{len(groups[lab])} 檔）"):
+            st.markdown('<div class="gyh-card">', unsafe_allow_html=True)
+            for r in groups[lab]:
+                card_fn(r)
+            st.markdown('</div>', unsafe_allow_html=True)
 
 
 def _holding_card(r: dict) -> None:
     code = _g(r, "代號", "symbol")
     name = _g(r, "名稱", "name")
     adv = _g(r, "我該做啥", "綜合建議")
+    icon, label_w, _ = _plain_action(adv)
     pnl_pct = _num(_g(r, "損益%"))
-    pct_txt = f"{pnl_pct:+.1f}%" if pnl_pct is not None else "—"
-    label = f"{_action_icon(adv)} {_action_short(adv)}　{code} {name}　{pct_txt}"
+    pct_txt = f"　{'賺' if pnl_pct >= 0 else '賠'} {abs(pnl_pct):.1f}%" if pnl_pct is not None else ""
+    label = f"{icon} {label_w}　{code} {name}{pct_txt}"
     with st.expander(label):
         _detail_common(r, adv)
         # 目標賣價
@@ -489,8 +558,9 @@ def _watch_card(r: dict) -> None:
     name = _g(r, "名稱", "name")
     reason = _g(r, "追蹤理由")
     adv = _g(r, "我該做啥", "綜合建議")
+    icon, label_w, _ = _plain_action(adv)
     tag = f"（{reason}）" if reason else ""
-    label = f"{_action_icon(adv)} {_action_short(adv)}　{code} {name}{tag}"
+    label = f"{icon} {label_w}　{code} {name}{tag}"
     with st.expander(label):
         _detail_common(r, adv)
 
@@ -498,21 +568,24 @@ def _watch_card(r: dict) -> None:
 def _detail_common(r: dict, adv: str) -> None:
     """順序:損益 → 動能(+白話原因) → 基本面(+白話原因) → 我該做啥(最後)。"""
     mut = "color:#5F5E5A"
-    # 1) 損益(持有才有)
+    # 1) 賺賠(持有才有)
     pnl_pct = _g(r, "損益%")
     if pnl_pct:
         pnl = _g(r, "損益")
+        word = ""
         try:
-            col = "var(--color-text-success)" if float(pnl_pct) >= 0 else "var(--color-text-danger)"
+            v = float(pnl_pct)
+            col = "var(--color-text-success)" if v >= 0 else "var(--color-text-danger)"
+            word = "賺 " if v >= 0 else "賠 "
         except ValueError:
             col = "inherit"
-        st.markdown(f'💰 <b>損益</b> <span style="color:{col};font-weight:500">{pnl_pct}%'
+        st.markdown(f'💰 <b>賺賠</b>　<span style="color:{col};font-weight:500">{word}{pnl_pct}%'
                     f'{("  " + pnl) if pnl else ""}</span>', unsafe_allow_html=True)
-    # 2) 動能(+ 白話原因)
+    # 2) 最近走勢(白話)
     short = _g(r, "短線燈號")
     mom = _g(r, "動能原因")
-    st.markdown(f'<div style="margin-top:8px">⚡ <b>動能</b> {short}'
-                + (f'<br><span style="{mut};font-size:13px">← {mom}</span>' if mom else "")
+    st.markdown(f'<div style="margin-top:8px">📈 <b>最近走勢</b>　{short}'
+                + (f'<br><span style="{mut};font-size:13px">{mom}</span>' if mom else "")
                 + '</div>', unsafe_allow_html=True)
     # 3) 基本面 — 拆成「公司面」+「籌碼面」兩塊,各自一個燈 + 白話原因
     ft, fs = _rel_time(_g(r, "基本面資料時間"), 60 * 24 * 5)
@@ -526,16 +599,16 @@ def _detail_common(r: dict, adv: str) -> None:
         st.markdown(f'<div style="margin-top:10px">{icon} <b>{title}</b> '
                     f'{_fund_light_label(light)}</div>' + body, unsafe_allow_html=True)
 
-    _fund_block("🏢", "公司面", _g(r, "公司面燈號"),
+    _fund_block("🏢", "這家公司", _g(r, "公司面燈號"),
                 ["估值", "配息", "營收動能"])
-    _fund_block("📊", "籌碼面", _g(r, "籌碼面燈號"),
+    _fund_block("🐳", "大戶(法人)", _g(r, "籌碼面燈號"),
                 ["法人籌碼", "近期新聞重點"])
-    st.caption(f"基本面資料 {ft}{' ⚠️舊' if fs else ''}")
-    # 4) 我該做啥(最後)
+    st.caption(f"公司資料 {ft}{' ⚠️舊' if fs else ''}")
+    # 4) 怎麼辦(最後)
     reason = _action_reason(adv)
     st.markdown('<div style="margin-top:10px;border-top:0.5px solid rgba(127,127,127,.2);'
-                'padding-top:8px">👉 <b>我該做啥</b>　'
-                + _pill(_action_short(adv), _pill_kind(adv))
+                'padding-top:8px">👉 <b>怎麼辦</b>　'
+                + _pill(_plain_action(adv)[1], _pill_kind(adv))
                 + (f'<br><span style="{mut};font-size:13px">{reason}</span>' if reason else "")
                 + '</div>', unsafe_allow_html=True)
     # 本次花費
