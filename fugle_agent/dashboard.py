@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 00:13  (原最後更新 2026-05-29)(全新)
+# 📅 ★最新版★ 上傳於 2026-06-01 14:26  (原最後更新 2026-05-29)(全新)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -350,6 +350,12 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     with st.expander("⚙️ 更多"):
         if st.button("🔁 重新整理", use_container_width=True):
             st.rerun()
+        _repo = os.getenv("GITHUB_REPO", "kiddnumber5ykao/fugle-agent")
+        st.markdown(
+            f'<a href="https://github.com/{_repo}/actions" target="_blank" '
+            f'style="display:block;text-align:center;padding:8px;border:0.5px solid '
+            f'rgba(127,127,127,.3);border-radius:8px;text-decoration:none;margin:4px 0">'
+            f'📊 看更新跑的狀況(GitHub Actions)</a>', unsafe_allow_html=True)
         # 追蹤清單整理已自動併進「新交易更新」,不再需要手動按鈕
         if cancel_all and st.button("🛑 終止跑中的更新", use_container_width=True):
             res = cancel_all()

@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 23:14  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
+# 📅 ★最新版★ 上傳於 2026-06-01 14:33  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -2804,10 +2804,20 @@ def _momentum_light(signals: dict) -> tuple[str, str]:
     else:
         light = "🔴 弱勢"
 
+    # 過熱:已經是強勢、但股價離 10 日線太遠(漲多了)→ 標「(過熱)」,提醒別追高
+    overheated = (light == "🔥 強勢" and m >= 10)
+    if overheated:
+        light = "🔥 強勢(過熱)"
+
     # 白話原因(像朋友講)
-    if light == "🔥 強勢":
-        tail = "一堆人在搶買,氣勢很強" if big_vol else ("量沒特別爆但走勢很猛" if low_vol else "氣勢很強")
-        reason = f"漲得又快又猛,股價衝在均價上面,{tail},看起來還在往上衝"
+    if light.startswith("🔥"):
+        if overheated:
+            reason = ("漲得又快又猛,但已經離均價很遠、短線漲多了,"
+                      "要追小心追在高點,想買等拉回比較安全")
+        else:
+            tail = ("一堆人在搶買,氣勢很強" if big_vol
+                    else ("量沒特別爆但走勢很猛" if low_vol else "氣勢很強"))
+            reason = f"漲得又快又猛,股價衝在均價上面,{tail},看起來還在往上衝"
     elif light == "🟢 偏多":
         tail = "越來越多人進場" if big_vol else ("不過買的人沒特別多" if low_vol else "買盤穩穩的")
         reason = f"穩穩在漲,站在均價之上,{tail},看起來還會往上"
@@ -3353,6 +3363,11 @@ def _what_to_do(short_light: str, super_short_light: str,
         _lean = {"🟢": "偏多", "🟡": "中性", "🔴": "偏空"}
         return (f"⏳ 等技術[基本面{_lean[f]},但技術還沒分析,"
                 f"先跑「技術面」再決定買賣]")
+    # 過熱:強勢但漲多了 → 別追高(基本面爛仍然不要買)
+    if mom == "🔥" and "過熱" in str(short_light or "") and f != "🔴":
+        if is_position:
+            return "續抱[漲很多了,抱著就好、先別追加,等拉回再考慮加碼]"
+        return "再等等買[漲太多了,追高風險高,想買等拉回再進]"
     action, reason = (_held_action if is_position else _watch_action)(mom, f)
     return f"{action}[{reason}]"
 
@@ -3409,6 +3424,8 @@ def _position_advice(row: dict) -> str:
     if mom == "🔥":       # 強勢 → 抱緊,可加碼
         if f == "🔴":
             return f"續抱別加[{head}衝得兇但公司體質差,抱著別追加,到價就分批出]"
+        if "過熱" in str(short or ""):
+            return f"續抱[{head}漲很多了,抱著就好、先別追加,等拉回再考慮]"
         return f"抱緊加碼[{head}動能很強、還在噴,抱緊讓它跑,基本面也行可考慮加碼]"
     if mom == "🟢":       # 偏多 → 續抱
         if f == "🔴":
@@ -3462,8 +3479,12 @@ def resync_and_fill_names(scope: str = "all") -> dict:
         except Exception as e:
             print(f"⚠️ 補追蹤清單名稱失敗: {e}", flush=True)
 
-    # 只跑追蹤清單 → 到這就結束,完全不碰部位
+    # 只跑追蹤清單 → 照追蹤理由排序後結束,完全不碰部位
     if not do_pos:
+        try:
+            sheets_writer.sort_watchlist()
+        except Exception as e:
+            print(f"⚠️ 追蹤清單排序失敗: {e}", flush=True)
         return {"ok": True, "watchlist": n_wl, "positions": 0,
                 "realized": 0, "trades": 0}
 
@@ -3707,7 +3728,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                 "損益%":        round(pnl_pct, 2),
                 "今天表現":     signals["today_desc"],
                 "最新表現":     signals["today_desc"],
-                "技術資料時間": signals.get("latest_date", ""),
+                "技術資料時間": organized_at,   # 更新當下的時間(含時分秒);K線日期看「最新表現」
                 "最近3天":      signals["last3d_desc"],
                 "這週氛圍":     signals["weekly_mood_desc"],
                 "近10天走勢":   signals["ma10_desc"],
@@ -3740,7 +3761,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                     "籌碼面燈號":      chips_light,
                     "公司面燈號":      company_light,
                     "基本面整理時間":   organized_at,
-                    "基本面資料時間":   fd.get("data_date", ""),
+                    "基本面資料時間":   organized_at,   # 更新當下時間(含時分秒)
                     "本次花費":         f"${fd.get('cost_usd', 0):.4f}",
                 }
             else:
@@ -3861,7 +3882,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                 "現價":         signals["current_price"],
                 "今天表現":     signals["today_desc"],
                 "最新表現":     signals["today_desc"],
-                "技術資料時間": signals.get("latest_date", ""),
+                "技術資料時間": organized_at,   # 更新當下的時間(含時分秒);K線日期看「最新表現」
                 "最近3天":      signals["last3d_desc"],
                 "這週氛圍":     signals["weekly_mood_desc"],
                 "近10天走勢":   signals["ma10_desc"],
@@ -3892,7 +3913,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                     "籌碼面燈號":      chips_light,
                     "公司面燈號":      company_light,
                     "基本面整理時間":   organized_at,
-                    "基本面資料時間":   fd.get("data_date", ""),
+                    "基本面資料時間":   organized_at,   # 更新當下時間(含時分秒)
                     "本次花費":         f"${fd.get('cost_usd', 0):.4f}",
                 }
             else:
