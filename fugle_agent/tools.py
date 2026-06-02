@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 23:17  (原最後更新 2026-05-29)(我該做啥 + 資料不足燈 + resync 一條龍)
+# 📅 ★最新版★ 上傳於 2026-06-02 18:30  欄位白話改名+批次1-3(賣三級/相對強度/停損/卡住天數)
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
