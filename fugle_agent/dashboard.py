@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 (批次1)動作精簡:賣三級(全賣/賣一半/賣1/3)+盯緊併抱著+先買一點
+# 📅 ★最新版★ 上傳於 2026-06-02 (批次2)大盤順逆風橫幅 + 逆風只擋買;(批次1)動作精簡賣三級
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -355,6 +355,37 @@ def _plain_order_key(advice: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+@st.cache_data(ttl=900, show_spinner=False)
+def _market_ctx_cached() -> dict:
+    """大盤順逆風(快取 15 分,避免每次互動都重抓 yfinance)。"""
+    try:
+        from fugle_agent import market_context
+        return market_context.get_market_context()
+    except Exception:
+        return {"light": "🟡 普通", "phase": "", "is_headwind": False,
+                "reason": "大盤資料抓不到,當作普通", "updated": ""}
+
+
+def _render_market_banner() -> bool:
+    """畫大盤順逆風橫幅(全頁背景),回傳 is_headwind(逆風=True)。"""
+    ctx = _market_ctx_cached()
+    head = bool(ctx.get("is_headwind"))
+    light = ctx.get("light", "🟡 普通")
+    reason = ctx.get("reason", "")
+    if head:
+        bg, bd = "rgba(226,75,74,.10)", "rgba(226,75,74,.40)"
+    elif "🟢" in light:
+        bg, bd = "rgba(99,153,34,.10)", "rgba(99,153,34,.40)"
+    else:
+        bg, bd = "rgba(127,127,127,.07)", "rgba(127,127,127,.25)"
+    st.markdown(
+        f'<div style="background:{bg};border:0.5px solid {bd};border-radius:10px;'
+        f'padding:8px 12px;margin-bottom:10px;font-size:13px">'
+        f'🌡️ <b>大盤：{light}</b>　{reason}</div>',
+        unsafe_allow_html=True)
+    return head
+
+
 def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
            workflow_running=None, cleanup_watchlist=None) -> None:
     st.markdown("""<style>
@@ -380,6 +411,9 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     mode = st.radio("檢視", ["我的持股", "我的追蹤"], horizontal=True,
                     label_visibility="collapsed", key="dash_mode")
     mode = "持有" if mode == "我的持股" else "追蹤"
+
+    # ── 🌡️ 大盤順逆風(背景,全頁共用;當下算、不存)──
+    st.session_state["_mkt_headwind"] = _render_market_banner()
 
     # 跑中狀態(鎖按鈕用)
     if workflow_running:
@@ -647,10 +681,18 @@ def _detail_common(r: dict, adv: str) -> None:
     st.caption(f"公司資料 {ft}{' ⚠️舊' if fs else ''}")
     # 4) 怎麼辦(最後)
     reason = _action_reason(adv)
+    # 大盤逆風只擋「買」:買進類動作加一句提醒(賣/抱不受影響)
+    _buy_labels = ("可以買", "先買一點", "還能再買一點")
+    _headwind_note = ""
+    if (st.session_state.get("_mkt_headwind")
+            and _plain_action(adv)[1] in _buy_labels):
+        _headwind_note = ('<br><span style="color:#A32D2D;font-size:13px">'
+                          '🌡️ 大盤逆風,想買的話等大盤穩一點再進</span>')
     st.markdown('<div style="margin-top:10px;border-top:0.5px solid rgba(127,127,127,.2);'
                 'padding-top:8px">👉 <b>怎麼辦</b>　'
                 + _pill(_plain_action(adv)[1], _pill_kind(adv))
                 + (f'<br><span style="{mut};font-size:13px">{reason}</span>' if reason else "")
+                + _headwind_note
                 + '</div>', unsafe_allow_html=True)
     # 本次花費
     cost = _g(r, "本次花費")
