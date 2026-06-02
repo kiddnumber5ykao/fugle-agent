@@ -62,7 +62,7 @@ def _new_position_symbols(time_col: str) -> list[str]:
 def main() -> None:
     step = (sys.argv[1] if len(sys.argv) > 1 else "").lower().strip()
     scope = (sys.argv[2] if len(sys.argv) > 2 else "all").lower().strip()
-    if step not in ("resync", "technical", "fundamental", "recompute"):
+    if step not in ("resync", "technical", "fundamental", "recompute", "foreign"):
         print(f"❌ 不認識的步驟: {step!r}")
         sys.exit(2)
     if scope not in ("all", "positions", "watchlist", "watchlist_new", "positions_new"):
@@ -120,6 +120,17 @@ def main() -> None:
         adv = _recompute_advice(eff_scope)
         print(f"   🧭 部位 {adv.get('positions')} / 追蹤 {adv.get('watchlist')}")
         # 最後比對「上次的燈」抓今天的變化(免費,純比對)
+        detect_intraday_changes(eff_scope)
+    elif step == "foreign":
+        # 外資每日(證交所/櫃買官方 EOD)→ 籌碼面燈號 + 法人籌碼 + 翻轉提醒。免費。
+        from fugle_agent.foreign_flow import update_foreign
+        r = update_foreign(eff_scope)
+        if not r.get("ok"):
+            print(f"❌ 外資更新失敗: {r.get('error')}")
+            sys.exit(3)
+        # 外資改了籌碼面燈 → 重算一次「我該做啥」,再抓翻燈變化
+        adv = _recompute_advice(eff_scope)
+        print(f"   🧭 重算 部位 {adv.get('positions')} / 追蹤 {adv.get('watchlist')}")
         detect_intraday_changes(eff_scope)
 
     dt = (datetime.datetime.now() - t0).total_seconds()
