@@ -60,6 +60,22 @@ def _csv_url(sheet_id: str, tab_name: str) -> str:
     )
 
 
+# Sheet 用白話新欄名,程式內部沿用舊欄名 → 讀取時把新名也對應成舊 key,
+# 這樣 dashboard / tools 不用改,Sheet 又能顯示白話欄名。
+_HEADER_RENAME = {
+    "走勢燈":       "短線燈號",
+    "短期走勢燈":   "超短線燈號",
+    "公司燈":       "公司面燈號",
+    "大戶燈":       "籌碼面燈號",
+    "怎麼辦":       "我該做啥",
+    "比大盤":       "相對強度",
+    "新聞":         "近期新聞重點",
+    "走勢更新時間": "技術資料時間",
+    "公司更新時間": "基本面資料時間",
+    "走勢說明":     "動能原因",
+}
+
+
 def fetch_tab(tab_name: str, *, sheet_url: str | None = None,
               timeout: int = 20) -> list[dict]:
     """Fetch one tab as a list of ``{column: value}`` row dicts.
@@ -99,6 +115,10 @@ def fetch_tab(tab_name: str, *, sheet_url: str | None = None,
                  for k, v in row.items() if k}
         if not any(clean.values()):       # skip totally blank rows
             continue
+        # Sheet 用白話新欄名 → 也對應一份舊 key,讓下游程式不用改
+        for _new, _old in _HEADER_RENAME.items():
+            if _new in clean and _old not in clean:
+                clean[_old] = clean[_new]
         rows.append(clean)
     return rows
 
