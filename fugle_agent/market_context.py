@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 18:30  (新增)面向一 大盤順逆風
+# 📅 ★最新版★ 上傳於 2026-06-02 18:50  面向一 大盤順逆風(修:抓到今天那根+標資料日)
 """大盤順逆風 — 全頁共用背景,不分個股,不存 Sheet(當下算當下用)。
 
 時間邏輯:
@@ -25,12 +25,15 @@ def _now_tw() -> datetime.datetime:
 
 
 def _twii_signals() -> dict | None:
-    """回 {close, ma10, change_pct, above_ma10} 或 None(抓不到)。"""
-    r = us_market.candles(_TWII)
-    bars = (r or {}).get("data") or []
-    closes = [b["close"] for b in bars if b.get("close")]
-    if len(closes) < 2:
+    """回 {close, ma10, change_pct, above_ma10, date} 或 None(抓不到)。
+    ⚠️ yfinance 的 end 是開區間(不含當天),所以 to_date 要給「明天」,
+    今天那根才會被抓進來,不然會差一天(顯示昨天的漲跌)。"""
+    tomorrow = (_now_tw().date() + datetime.timedelta(days=1)).isoformat()
+    r = us_market.candles(_TWII, to_date=tomorrow)
+    bars = [b for b in ((r or {}).get("data") or []) if b.get("close")]
+    if len(bars) < 2:
         return None
+    closes = [b["close"] for b in bars]
     last = closes[-1]
     prev = closes[-2]
     ma10 = sum(closes[-10:]) / min(len(closes), 10)
@@ -39,6 +42,7 @@ def _twii_signals() -> dict | None:
         "ma10": ma10,
         "change_pct": (last / prev - 1) * 100 if prev else 0.0,
         "above_ma10": last >= ma10,
+        "date": bars[-1].get("date", ""),   # 最新那根是哪天(用來確認沒抓錯天)
     }
 
 
@@ -84,14 +88,15 @@ def get_market_context() -> dict:
         return {"light": "🟡 普通", "phase": "盤中", "is_headwind": False,
                 "reason": "抓不到加權指數,當作普通", "updated": updated}
     chg = s["change_pct"]
+    dtag = f"(資料 {s.get('date', '')})" if s.get("date") else ""
     if s["above_ma10"] and chg >= 0:
         light, head = "🟢 順風", False
-        reason = f"加權站上 10 日線、今天 {chg:+.1f}%,大盤偏多,順風"
+        reason = f"加權站上 10 日線、{chg:+.1f}%,大盤偏多,順風 {dtag}"
     elif (not s["above_ma10"]) and chg < 0:
         light, head = "🔴 逆風", True
-        reason = f"加權跌破 10 日線、今天 {chg:+.1f}%,大盤偏弱,買進保守點"
+        reason = f"加權跌破 10 日線、{chg:+.1f}%,大盤偏弱,買進保守點 {dtag}"
     else:
         light, head = "🟡 普通", False
-        reason = f"加權在均線附近、今天 {chg:+.1f}%,方向不明"
+        reason = f"加權在均線附近、{chg:+.1f}%,方向不明 {dtag}"
     return {"light": light, "phase": "盤中", "is_headwind": head,
             "reason": reason, "updated": updated}
