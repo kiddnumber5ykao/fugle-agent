@@ -3305,25 +3305,26 @@ def _mom_level(light: str) -> str:
 
 
 def _watch_action(mom: str, f: str) -> tuple[str, str]:
-    """沒持有(追蹤清單)的動作:5 段動能 × 基本面 → (動作, 白話原因)。"""
+    """沒持有(追蹤清單)的動作:5 段動能 × 基本面 → (動作, 白話原因)。
+    動作詞:可以買 / 先買一點 / 再等等 / 先別碰。"""
     if mom == "🔴":
-        return ("不要買", "走勢明顯轉弱,等止跌再說")
+        return ("先別碰", "走勢明顯轉弱,等止跌再說")
     if mom == "🟠":
-        return ("先別買", "開始走弱了,先別追,等它站穩再看")
+        return ("先別碰", "開始走弱了,先別追,等它站穩再看")
     if mom == "🟡":
         if f == "🟢":
-            return ("再等等買", "公司面不錯,等動能轉強再進場")
+            return ("再等等", "公司面不錯,等動能轉強再進場")
         if f == "🔴":
-            return ("不要買", "沒動能、公司體質又差,不值得進")
+            return ("先別碰", "沒動能、公司體質又差,不值得進")
         return ("再等等", "還沒有明顯方向,先等等看")
     if mom == "🟢":
         if f == "🔴":
-            return ("不要買", "雖然在漲,但公司體質差,不碰")
-        return ("可以買", "穩穩在漲、基本面也撐得住,可以慢慢進、不用搶")
+            return ("先別碰", "雖然在漲,但公司體質差,不碰")
+        return ("先買一點", "穩穩在漲、基本面也撐得住,先進一些、不用搶")
     if mom == "🔥":
         if f == "🔴":
-            return ("不要買", "衝得兇但公司體質差,再強也別追")
-        return ("趕快買", "動能很強、正在噴,要買就要快,但別追太高")
+            return ("先別碰", "衝得兇但公司體質差,再強也別追")
+        return ("可以買", "動能很強、正在噴,要買就要快,但別追太高")
     return ("再等等", "訊號不明,先等等")
 
 
@@ -3366,8 +3367,8 @@ def _what_to_do(short_light: str, super_short_light: str,
     # 過熱:強勢但漲多了 → 別追高(基本面爛仍然不要買)
     if mom == "🔥" and "過熱" in str(short_light or "") and f != "🔴":
         if is_position:
-            return "續抱[漲很多了,抱著就好、先別追加,等拉回再考慮加碼]"
-        return "再等等買[漲太多了,追高風險高,想買等拉回再進]"
+            return "抱著就好[漲很多了,抱著就好、先別追加,等拉回再考慮加碼]"
+        return "再等等[漲太多了,追高風險高,想買等拉回再進]"
     action, reason = (_held_action if is_position else _watch_action)(mom, f)
     return f"{action}[{reason}]"
 
@@ -3426,25 +3427,25 @@ def _position_advice(row: dict) -> str:
             return f"抱著就好[{head}漲很多了,別追高,抱著、等拉回再說]"
         if f == "🔴":
             return f"抱著就好[{head}衝得兇但公司體質差,抱著就好、別追加]"
-        return f"可以加碼[{head}還在強勢往上,可以再買一筆讓它跑]"
+        return f"還能再買一點[{head}還在強勢往上,可以再買一筆讓它跑]"
     if mom == "🟢":       # 偏多
         if f == "🔴":
             return f"抱著就好[{head}還在漲但公司體質差,先抱著、別貪]"
         return f"抱著就好[{head}穩穩在漲,先抱著別賣太早]"
     if mom == "🟡":       # 中性
         if f == "🔴":
-            return "該賣了[沒動能、公司體質又差,出場吧(之後有機會再買回)]"
+            return "賣1/3[沒動能、公司體質又差,先收 1/3 減壓(之後有機會再買回)]"
         return "抱著就好[沒明顯動能,先耐心抱著看,別急]"
-    if mom == "🟠":       # 偏弱 → 有賺先落袋、虧就先看緊(不分批)
+    if mom == "🟠":       # 偏弱 → 有賺賣一半落袋、沒賺先抱著留意
         extra = "、基本面也差" if f == "🔴" else ""
         if gain:
-            return f"該賣了[{gain}、開始轉弱{extra},先獲利了結(之後有機會再買回)]"
-        return f"盯緊一點[開始轉弱{extra}、還沒破底,先看緊,破了就走]"
-    # 🔴 弱勢 → 全賣
+            return f"賣一半[{gain}、開始轉弱{extra},先賣一半落袋(之後有機會再買回)]"
+        return f"抱著就好[開始轉弱{extra}、還沒破底,先留意,破了就走]"
+    # 🔴 弱勢 → 全部賣掉
     extra = "、基本面也差更該走" if f == "🔴" else ""
     if gain:
-        return f"該賣了[{gain}又明顯轉弱{extra},獲利了結]"
-    return f"停損[明顯轉弱又在虧{extra},別凹,考慮停損]"
+        return f"全部賣掉[{gain}又明顯轉弱{extra},獲利了結出場]"
+    return f"全部賣掉[明顯轉弱又在虧{extra},別凹,停損出場]"
 
 
 def resync_and_fill_names(scope: str = "all") -> dict:

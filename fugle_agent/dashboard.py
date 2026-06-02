@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 (原最後更新 2026-05-29)(持股頁全收合 + 切換改回單純點選)
+# 📅 ★最新版★ 上傳於 2026-06-02 (批次1)動作精簡:賣三級(全賣/賣一半/賣1/3)+盯緊併抱著+先買一點
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -298,25 +298,28 @@ def _changes_html() -> tuple[int, str]:
     return (len(changes), body)
 
 
-# 動作詞 → (icon, 白話標籤, 是否「要動手」)。要動手的排最上面,其他收合分組。
+# 動作詞 → (icon, 白話標籤, 是否「要動手」)。全部收合分組,is_act 不再用來展開。
 def _plain_action(advice: str) -> tuple[str, str, bool]:
     a = _action_short(advice)
-    # 賣:一律全賣(不分批),減碼類也歸這
-    if (a.startswith("趕快賣") or a.startswith("停損") or a.startswith("該賣")
-            or a.startswith("賣一批") or a.startswith("先減碼") or a.startswith("偏減碼")):
-        return ("🛑", "該賣了", True)
-    # 加碼:收成一組(不急,點開看)
-    if a.startswith("可以加碼") or a.startswith("抱緊加碼"):
-        return ("💪", "可以加碼", False)
-    # 買(追蹤)
-    if a.startswith("趕快買"):
+    # ── 賣:三級 ──
+    if a.startswith("賣一半"):
+        return ("🔻", "賣一半", True)
+    if a.startswith("賣1/3") or a.startswith("賣1／3") or a.startswith("賣三分"):
+        return ("✂️", "賣1/3", True)
+    if (a.startswith("全部賣") or a.startswith("全賣") or a.startswith("停損")
+            or a.startswith("該賣") or a.startswith("趕快賣")):
+        return ("🛑", "全部賣掉", True)
+    # ── 加碼(持股) ──
+    if a.startswith("還能再買") or a.startswith("可以加碼") or a.startswith("抱緊加碼"):
+        return ("💪", "還能再買一點", True)
+    # ── 買(追蹤) ──
+    if a.startswith("可以買") or a.startswith("趕快買"):
         return ("🚀", "可以買", True)
-    if a.startswith("可以買"):
-        return ("🟢", "可以慢慢買", True)
-    # 不用動
-    if a.startswith("盯緊") or a.startswith("留意"):
-        return ("👀", "盯緊一點", False)
-    if a.startswith("續抱") or a.startswith("抱"):
+    if a.startswith("先買一點") or a.startswith("慢慢買"):
+        return ("🟢", "先買一點", True)
+    # ── 不用動手 ──
+    if (a.startswith("抱") or a.startswith("續抱") or a.startswith("盯緊")
+            or a.startswith("留意")):
         return ("🤲", "抱著就好", False)
     if a.startswith("再等等"):
         return ("⏸️", "再等等", False)
@@ -326,21 +329,23 @@ def _plain_action(advice: str) -> tuple[str, str, bool]:
     return ("⚪", "資料不足", False)
 
 
-# 由上到下的優先序(要動手的在前)
-_PLAIN_ORDER = ["該賣了", "可以買", "可以慢慢買", "可以加碼",
-                "盯緊一點", "抱著就好", "再等等", "先別碰", "資料不足"]
+# 由上到下的優先序(急→緩;持股與追蹤共用一張表,各頁只會出現自己的)
+_PLAIN_ORDER = ["全部賣掉", "賣一半", "賣1/3",
+                "可以買", "先買一點", "還能再買一點",
+                "再等等", "先別碰", "抱著就好", "資料不足"]
 
-# 收合群組標題用的白話講法(個股卡片內仍用上面的短詞)
+# 收合群組標題(個股卡片內仍用上面的短詞)
 _GROUP_TITLE = {
-    "該賣了":   "今天該賣的",
-    "可以加碼": "還能再買一點的",
-    "盯緊一點": "要盯緊的",
-    "抱著就好": "抱著就好的",
-    "可以買":   "可以買的",
-    "可以慢慢買": "可以慢慢買的",
-    "再等等":   "再等等的",
-    "先別碰":   "先別碰的",
-    "資料不足": "資料不足",
+    "全部賣掉":   "全部賣掉",
+    "賣一半":     "賣一半",
+    "賣1/3":      "賣 1/3",
+    "還能再買一點": "還能再買一點",
+    "可以買":     "可以買",
+    "先買一點":   "先買一點",
+    "再等等":     "再等等",
+    "先別碰":     "先別碰",
+    "抱著就好":   "抱著就好",
+    "資料不足":   "資料不足",
 }
 
 
