@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 (批次2)大盤順逆風橫幅 + 逆風只擋買;(批次1)動作精簡賣三級
+# 📅 ★最新版★ 上傳於 2026-06-02 (批次3)走勢加相對強度+卡住天數、賺賠加停損+賺賠比/進場參考
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -640,6 +640,40 @@ def _watch_card(r: dict) -> None:
         _detail_common(r, adv)
 
 
+def _fnum(v):
+    try:
+        return float(str(v).replace(",", "").replace("$", "").replace("%", "").strip())
+    except (ValueError, AttributeError, TypeError):
+        return None
+
+
+def _risk_line(r: dict, is_holding: bool) -> str:
+    """停損點 + 賺賠比(現算,不存欄位)。持股=賺賠比;追蹤=進場停損參考。"""
+    mut = "color:#5F5E5A"
+    cur = _fnum(_g(r, "現價"))
+    stop = _fnum(_g(r, "停損價"))
+    if not cur or not stop or stop <= 0:
+        return ""
+    down = (cur - stop) / cur * 100      # 離停損%(正=還有空間)
+    # 找「下一個目標」:持股用淨賺價、追蹤用離20天高(沒有就略過賺賠比)
+    target = None
+    for col in ("淨賺5%價", "淨賺10%價", "淨賺15%價", "淨賺20%價"):
+        p = _fnum(_g(r, col))
+        if p and p > cur:
+            target = p
+            break
+    lines = [f"跌破 10 日線(約 {stop:.1f} 元)就走，離停損 {down:+.1f}%"]
+    if target and down > 0:
+        up = (target - cur) / cur * 100
+        ratio = up / down if down else 0
+        verdict = ("划算" if ratio >= 1.5 else ("還好" if ratio >= 1 else "偏不划算、別貪"))
+        lines.append(f"再漲 +{up:.1f}% 到下一個目標　賺賠比約 {up:.0f}:{down:.0f} → {verdict}")
+    head = "💰 <b>賺賠比</b>" if is_holding else "💰 <b>進場參考</b>"
+    body = "<br>".join(lines)
+    return (f'<div style="margin-top:8px">{head}'
+            f'<br><span style="{mut};font-size:13px">{body}</span></div>')
+
+
 def _detail_common(r: dict, adv: str) -> None:
     """順序:損益 → 動能(+白話原因) → 基本面(+白話原因) → 我該做啥(最後)。"""
     mut = "color:#5F5E5A"
@@ -656,10 +690,26 @@ def _detail_common(r: dict, adv: str) -> None:
             col = "inherit"
         st.markdown(f'💰 <b>賺賠</b>　<span style="color:{col};font-weight:500">{word}{pnl_pct}%'
                     f'{("  " + pnl) if pnl else ""}</span>', unsafe_allow_html=True)
-    # 2) 最近走勢(白話)
+    # 1b) 停損 / 賺賠比(持股)或 進場參考(追蹤)
+    _rl = _risk_line(r, bool(pnl_pct))
+    if _rl:
+        st.markdown(_rl, unsafe_allow_html=True)
+    # 2) 最近走勢(白話)+ 相對強度 + 卡住天數
     short = _g(r, "短線燈號")
     mom = _g(r, "動能原因")
-    st.markdown(f'<div style="margin-top:8px">📈 <b>最近走勢</b>　{short}'
+    rs = _g(r, "相對強度")
+    stuck = _g(r, "卡住天數")
+    extra = []
+    if rs:
+        extra.append(rs)
+    try:
+        sd = int(float(stuck))
+        if sd >= 1:
+            extra.append(f"卡 {sd} 天" + ("、卡太久可考慮換股" if sd >= 3 else ""))
+    except (ValueError, TypeError):
+        pass
+    extra_txt = ("　" + "・".join(extra)) if extra else ""
+    st.markdown(f'<div style="margin-top:8px">📈 <b>最近走勢</b>　{short}{extra_txt}'
                 + (f'<br><span style="{mut};font-size:13px">{mom}</span>' if mom else "")
                 + '</div>', unsafe_allow_html=True)
     # 3) 基本面 — 拆成「公司面」+「籌碼面」兩塊,各自一個燈 + 白話原因

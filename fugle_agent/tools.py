@@ -2730,6 +2730,8 @@ def _compute_short_signals(sym: str) -> dict:
             "today_change_pct": today_change_pct,
             "today_vol_ratio":  vol_ratio_today,
             "change_3d_pct":    change_3d_pct,
+            "change_20d_pct":   ((current / closes[-21] - 1) * 100
+                                 if len(closes) >= 21 else 0),
             "rsi7":             rsi7,
             "dist_ma10_pct":    dist_ma10_pct,
             "vol_ratio_5_20":   vol_ratio_5_20,
@@ -2739,6 +2741,58 @@ def _compute_short_signals(sym: str) -> dict:
     except Exception as e:
         return {"ok": False, "mode": getattr(_client, "mode", "unknown"),
                 "error": f"{type(e).__name__}: {e}"}
+
+
+_MKT_20D_CACHE: dict = {"ts": None, "val": None}
+
+
+def _market_20d_return() -> float | None:
+    """加權指數近 20 交易日報酬%(每次跑快取 10 分,避免每檔重抓)。"""
+    import time
+    now = time.time()
+    if _MKT_20D_CACHE["ts"] and now - _MKT_20D_CACHE["ts"] < 600:
+        return _MKT_20D_CACHE["val"]
+    val = None
+    try:
+        from . import us_market
+        r = us_market.candles("^TWII")
+        closes = [b["close"] for b in (r or {}).get("data", []) if b.get("close")]
+        if len(closes) >= 21:
+            val = (closes[-1] / closes[-21] - 1) * 100
+    except Exception:
+        val = None
+    _MKT_20D_CACHE.update(ts=now, val=val)
+    return val
+
+
+def _relative_strength(signals: dict) -> str:
+    """個股近 20 天 vs 大盤近 20 天 → 比大盤強 / 差不多 / 比大盤弱(白話)。
+    抓不到大盤時回空字串。"""
+    if not signals.get("ok"):
+        return ""
+    mkt = _market_20d_return()
+    if mkt is None:
+        return ""
+    diff = (signals.get("change_20d_pct", 0) or 0) - mkt
+    if diff >= 5:
+        return "比大盤強"
+    if diff <= -5:
+        return "比大盤弱"
+    return "跟大盤差不多"
+
+
+def _stop_price(signals: dict) -> float | None:
+    """停損價 = 10 日線價位。用現價與『距10日線%』反推。"""
+    if not signals.get("ok"):
+        return None
+    cur = signals.get("current_price")
+    m = signals.get("dist_ma10_pct")
+    if cur is None or m is None:
+        return None
+    try:
+        return round(cur / (1 + m / 100.0), 2)
+    except Exception:
+        return None
 
 
 def _short_term_light(signals: dict) -> str:
@@ -3708,6 +3762,7 @@ def _build_existing_lights_map(source: str) -> dict[str, dict]:
             "super_short": str(r.get("超短線燈號") or ""),
             "chips":       str(r.get("籌碼面燈號") or ""),
             "company":     str(r.get("公司面燈號") or ""),
+            "stuck":       str(r.get("卡住天數") or ""),
         }
     return out
 
@@ -3800,6 +3855,12 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
             pnl_pct = (pnl / total_cost * 100) if total_cost else 0
             short_light, _mom_reason = _momentum_light(signals)
             super_light = _super_short_term_light(signals)
+            # 卡住天數:動能熄火(🟡 中性)連續幾天 → 滿 3 天觸發換股提醒
+            try:
+                _prev_stuck = int(float(prev.get("stuck") or 0))
+            except Exception:
+                _prev_stuck = 0
+            _stuck = (_prev_stuck + 1) if _mom_level(short_light) == "🟡" else 0
             tech_payload = {
                 "現價":         round(price, 2),
                 "市值":         round(gross, 2),
@@ -3816,6 +3877,9 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                 "短線燈號":     short_light,
                 "動能原因":     _mom_reason,
                 "超短線燈號":   super_light,
+                "相對強度":     _relative_strength(signals),
+                "停損價":       _stop_price(signals),
+                "卡住天數":     _stuck,
                 "技術整理時間": organized_at,
             }
         else:
@@ -3970,6 +4034,8 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                 "短線燈號":     short_light,
                 "動能原因":     _mom_reason,
                 "超短線燈號":   super_light,
+                "相對強度":     _relative_strength(signals),
+                "停損價":       _stop_price(signals),
                 "技術整理時間": organized_at,
             }
         else:
