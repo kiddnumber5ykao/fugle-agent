@@ -1,0 +1,35 @@
+# 📅 ★最新版★ 上傳於 2026-06-02 (新增)外資每日提醒 — 每交易日收盤後跑一次
+name: 外資每日 (收盤後)
+run-name: 外資每日 [${{ inputs.scope || 'all' }}]
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: '範圍 all/positions/watchlist'
+        type: string
+        required: false
+        default: all
+  schedule:
+    # 台股收盤 13:30,三大法人(外資)買賣超約 15:00–18:00 才公布。
+    # 18:30(台北)= UTC 10:30,每個交易日(週一~週五)跑一次。免費,不花 AI 錢。
+    - cron: "30 10 * * 1-5"
+
+env:
+  ANTHROPIC_API_KEY:        ${{ secrets.ANTHROPIC_API_KEY }}
+  FUGLE_MARKETDATA_API_KEY: ${{ secrets.FUGLE_MARKETDATA_API_KEY }}
+  SHEETS_WRITER_URL:        ${{ secrets.SHEETS_WRITER_URL }}
+  PORTFOLIO_SHEET_URL:      ${{ secrets.PORTFOLIO_SHEET_URL }}
+  ANTHROPIC_MODEL:          ${{ secrets.ANTHROPIC_MODEL }}
+  FUGLE_MOCK: "0"
+
+jobs:
+  foreign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip }
+      - run: pip install -r requirements.txt
+      - run: python scripts/run_step.py foreign ${{ inputs.scope || 'all' }}
