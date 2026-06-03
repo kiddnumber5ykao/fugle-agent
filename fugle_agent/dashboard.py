@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 19:10  「更新股價走勢」改成當場跑(快,免GitHub開機)
+# 📅 ★最新版★ 上傳於 2026-06-02 19:25  「更新股價走勢」當場跑 + 完成彈出通知/上次更新時間
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -492,10 +492,16 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
                 r = _run_technical_inline()
             if r.get("ok"):
                 st.cache_data.clear()
-                st.success("✅ 股價走勢更新完成")
+                st.session_state["_tech_done_at"] = (
+                    datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+                ).strftime("%H:%M:%S")
+                st.toast("✅ 股價走勢更新完成", icon="✅")
                 st.rerun()
             else:
+                st.session_state["_tech_err"] = str(r.get("error"))
                 st.error(f"❌ 更新失敗:{r.get('error')}")
+        if st.session_state.get("_tech_done_at"):
+            st.caption(f"🕒 上次手動更新股價:{st.session_state['_tech_done_at']}")
 
         st.caption("想連公司基本面重查一遍(花一點錢,一週一次就好)")
         if st.button("🔍 重查公司基本面", use_container_width=True, disabled=any_running,
