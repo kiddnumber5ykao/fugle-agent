@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 22:10  按下去先在「資料時間」下顯示正在進行中→跑完同處顯示完成
+# 📅 ★最新版★ 上傳於 2026-06-03 23:20  更新狀態改「分頁獨立」:持股/追蹤各自顯示、各自只更新自己
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -355,17 +355,17 @@ def _plain_order_key(advice: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-def _run_technical_inline() -> dict:
+def _run_technical_inline(scope: str = "all") -> dict:
     """在 app 這台直接跑「更新股價走勢」(技術+重算+變化偵測),不送 GitHub。
-    比背景跑快很多(省掉開機/裝套件),適合免費又快的股價刷新。"""
+    scope: 'positions'(只持股) / 'watchlist'(只追蹤) / 'all'。"""
     import asyncio
     try:
         from fugle_agent.tools import (organize_all_technical, _recompute_advice,
                                        detect_intraday_changes)
-        asyncio.run(organize_all_technical.handler({"scope": "all"}))
-        _recompute_advice("all")
+        asyncio.run(organize_all_technical.handler({"scope": scope}))
+        _recompute_advice(scope)
         try:
-            detect_intraday_changes("all")
+            detect_intraday_changes(scope)
         except Exception:
             pass   # 變化偵測失敗不影響主更新
         return {"ok": True}
@@ -433,11 +433,6 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     # ── 🌡️ 大盤順逆風(背景,全頁共用;當下算、不存)──
     st.session_state["_mkt_headwind"] = _render_market_banner()
 
-    # ── 📋 更新紀錄(放最上面、永遠看得到,換 tab 也不會消失)──
-    if st.session_state.get("_run_log"):
-        with st.expander("📋 更新紀錄", expanded=False):
-            for _line in reversed(st.session_state["_run_log"][-10:]):
-                st.caption(_line)
 
     # 跑中狀態(鎖按鈕用)
     if workflow_running:
@@ -495,13 +490,14 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
         st.caption("想立刻看最新股價(免費、當場跑、幾秒~十幾秒)")
         if st.button("⚡ 更新最新股價走勢", use_container_width=True, disabled=any_running,
                      help="直接在這台抓最新股價、重算走勢和「該做啥」(免費,不含公司面)"):
-            # 第一段:只先標記「正在進行中」+ 立刻重畫(真正的計算放到 render 最後才跑,
-            # 確保「正在進行中」會先畫在「資料時間」下面給你看到)
+            # 第一段:只先標記「正在進行中」(存在「當前這一頁」的 key)+ 立刻重畫,
+            # 真正的計算放到 render 最後才跑,確保「正在進行中」先畫在這一頁的「資料時間」下
             _t0 = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-            st.session_state["_last_status"] = {
+            st.session_state[f"_last_status_{mode}"] = {
                 "type": "info",
                 "msg": f"⏳ {_t0.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢更新 正在進行中…"}
             st.session_state["_pending_start"] = _t0.isoformat()
+            st.session_state["_pending_mode"] = mode
             st.rerun()
 
         st.caption("想連公司基本面重查一遍(花一點錢,一週一次就好)")
@@ -531,29 +527,27 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
                 st.rerun()
 
     # 第二段:真正執行「更新股價走勢」— 放在 render 最後,
-    # 此時上面「資料時間」下的『正在進行中』已經畫出來給使用者看了,才開始算。
+    # 此時這一頁「資料時間」下的『正在進行中』已經畫出來給使用者看了,才開始算。
+    # 只更新「按下去那一頁」的範圍(持有→positions、追蹤→watchlist),狀態也只寫那一頁。
     _ps = st.session_state.pop("_pending_start", None)
-    if _ps:
+    _pm = st.session_state.pop("_pending_mode", None)
+    if _ps and _pm:
+        _scope = "positions" if _pm == "持有" else "watchlist"
         _t0 = datetime.datetime.fromisoformat(_ps)
-        r = _run_technical_inline()
+        r = _run_technical_inline(_scope)
         _t1 = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
         _secs = int((_t1 - _t0).total_seconds())
-        _log = st.session_state.setdefault("_run_log", [])
-        _log.append(f"⏳ {_t0.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢更新 正在進行中")
         if r.get("ok"):
             _done = f"✅ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢更新 完成(耗時 {_secs} 秒)"
-            _log.append(_done)
-            st.session_state["_last_status"] = {"type": "success", "msg": _done}
+            st.session_state[f"_last_status_{_pm}"] = {"type": "success", "msg": _done}
             st.cache_data.clear()
         else:
             _fail = f"❌ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢更新 失敗:{r.get('error')}"
-            _log.append(_fail)
-            st.session_state["_last_status"] = {"type": "error", "msg": _fail}
-        st.session_state["_run_log"] = _log[-12:]
+            st.session_state[f"_last_status_{_pm}"] = {"type": "error", "msg": _fail}
         st.rerun()
 
 
-def _last_update_caption(rows: list[dict]) -> None:
+def _last_update_caption(rows: list[dict], mode: str = "持有") -> None:
     # 顯示「資料時間」(資料本身是哪天的),不是「整理時間」(我幾點跑分析)
     tech = max((_g(r, "技術資料時間") for r in rows), default="")
     fund = max((_g(r, "基本面資料時間") for r in rows), default="")
@@ -563,8 +557,8 @@ def _last_update_caption(rows: list[dict]) -> None:
     if ts:
         warn += "　⚠️ 技術資料有點舊"
     st.caption(f"資料時間 — 技術 {tt} · 基本面 {ft}{warn}")
-    # 更新狀態(存在 session,每次重畫 → 換 tab、停在頁面都看得到)
-    _stat = st.session_state.get("_last_status")
+    # 更新狀態:每一頁(持有/追蹤)各自獨立,只顯示「這一頁」的狀態
+    _stat = st.session_state.get(f"_last_status_{mode}")
     if _stat:
         {"success": st.success, "error": st.error}.get(_stat["type"], st.info)(_stat["msg"])
 
@@ -580,7 +574,7 @@ def _render_holdings() -> None:
     if not rows:
         st.info("還沒有持股 — 在「股票交易」加交易,再到 ⚙️ 按「我剛買賣股票」。")
         return
-    _last_update_caption(rows)
+    _last_update_caption(rows, "持有")
     _render_stock_list(rows, _holding_card, act_top=False)
 
 
@@ -594,7 +588,7 @@ def _render_watchlist() -> None:
     if not rows:
         st.info("還沒有追蹤 — 在「追蹤清單」加代號,再到 ⚙️ 按「我剛加追蹤」。")
         return
-    _last_update_caption(rows)
+    _last_update_caption(rows, "追蹤")
     _render_stock_list(rows, _watch_card, act_top=False)
 
 
