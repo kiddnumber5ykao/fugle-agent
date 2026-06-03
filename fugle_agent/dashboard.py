@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 18:30  欄位白話改名+批次1-3(大盤橫幅/賣三級/相對強度/停損/賺賠比)
+# 📅 ★最新版★ 上傳於 2026-06-02 19:10  「更新股價走勢」改成當場跑(快,免GitHub開機)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -355,6 +355,24 @@ def _plain_order_key(advice: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+def _run_technical_inline() -> dict:
+    """在 app 這台直接跑「更新股價走勢」(技術+重算+變化偵測),不送 GitHub。
+    比背景跑快很多(省掉開機/裝套件),適合免費又快的股價刷新。"""
+    import asyncio
+    try:
+        from fugle_agent.tools import (organize_all_technical, _recompute_advice,
+                                       detect_intraday_changes)
+        asyncio.run(organize_all_technical.handler({"scope": "all"}))
+        _recompute_advice("all")
+        try:
+            detect_intraday_changes("all")
+        except Exception:
+            pass   # 變化偵測失敗不影響主更新
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def _market_ctx_cached() -> dict:
     """大盤順逆風(快取 15 分,避免每次互動都重抓 yfinance)。"""
@@ -467,11 +485,17 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
                 _after(trigger_workflow("full_update.yml", inputs={"scope": "watchlist_new"}),
                        "full_update", 900, "已開始分析新追蹤(背景跑)")
 
-        st.caption("想立刻看最新股價(免費)")
+        st.caption("想立刻看最新股價(免費、當場跑、幾秒~十幾秒)")
         if st.button("⚡ 更新最新股價走勢", use_container_width=True, disabled=any_running,
-                     help="抓最新股價、重算走勢和「該做啥」(免費,不含公司面)"):
-            _after(trigger_workflow("intraday_update.yml", inputs={"scope": "all"}),
-                   "intraday_update", 180, "已開始更新股價走勢(背景跑)")
+                     help="直接在這台抓最新股價、重算走勢和「該做啥」(免費,不含公司面)"):
+            with st.spinner("更新股價走勢中…(直接在這台算,稍等一下)"):
+                r = _run_technical_inline()
+            if r.get("ok"):
+                st.cache_data.clear()
+                st.success("✅ 股價走勢更新完成")
+                st.rerun()
+            else:
+                st.error(f"❌ 更新失敗:{r.get('error')}")
 
         st.caption("想連公司基本面重查一遍(花一點錢,一週一次就好)")
         if st.button("🔍 重查公司基本面", use_container_width=True, disabled=any_running,
