@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 18:30  欄位白話改名+批次1-3(賣三級/相對強度/停損/卡住天數)
+# 📅 ★最新版★ 上傳於 2026-06-02 20:10  寫回 Sheet 改平行(更新股價走勢加速)+欄位改名+批次1-3
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -3767,6 +3767,27 @@ def _build_existing_lights_map(source: str) -> dict[str, dict]:
     return out
 
 
+def _parallel_upsert(payloads: list[dict], writer, max_workers: int = 5) -> dict:
+    """同時寫多筆回 Sheet(原本一筆一筆寫很慢)。回 {代號: 是否成功}。"""
+    import concurrent.futures as _cf
+    out: dict[str, bool] = {}
+    if not payloads:
+        return out
+
+    def _w(pl):
+        sym = str(pl.get("symbol") or pl.get("代號") or "")
+        try:
+            return sym, bool(writer(**pl).get("ok"))
+        except Exception as e:
+            print(f"⚠️ 平行寫回 {sym} 失敗: {e}", flush=True)
+            return sym, False
+
+    with _cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        for sym, ok in ex.map(_w, payloads):
+            out[sym] = ok
+    return out
+
+
 def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                             organized_at: str, fee_rate: float, fee_min: float,
                             signals_cache: dict[str, dict] | None = None,
@@ -3804,7 +3825,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
         signals_cache = {}
 
     results = []
-    n_ok = n_fail = 0
+    to_write: list[dict] = []   # 先收集,最後平行寫回(加速)
     for p in positions:
         sym = str(p.get("symbol", "")).strip()
         shares = int(p.get("shares") or 0)
@@ -3838,11 +3859,9 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                     "超短線燈號":   "⚪ 資料不足",
                     "技術整理時間": f"{organized_at} (失敗)",
                 }
-                wb = sheets_writer.upsert_position(**fail_payload)
-                n_fail += 1
+                to_write.append(fail_payload)
                 results.append({"symbol": sym, "name": name,
-                                 "error": signals.get("error"),
-                                 "written": bool(wb.get("ok"))})
+                                 "error": signals.get("error")})
                 continue
             price = signals["current_price"]
             is_etf = sym.startswith("00") and len(sym) >= 4
@@ -3936,11 +3955,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
             **tech_payload,
             **fund_payload,
         }
-        wb = sheets_writer.upsert_position(**payload)
-        if wb.get("ok"):
-            n_ok += 1
-        else:
-            n_fail += 1
+        to_write.append(payload)
         results.append({
             "symbol":            sym,
             "name":              name,
@@ -3949,8 +3964,14 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
             "chips_light":       chips_light,
             "company_light":     company_light,
             "advice":            advice,
-            "written":           bool(wb.get("ok")),
         })
+
+    # 平行寫回 Sheet(同時寫多檔,比一筆一筆快很多)
+    ok_map = _parallel_upsert(to_write, sheets_writer.upsert_position)
+    n_ok = sum(1 for v in ok_map.values() if v)
+    n_fail = len(to_write) - n_ok
+    for r in results:
+        r["written"] = ok_map.get(str(r.get("symbol")), False)
     return {"n": len(results), "n_ok": n_ok, "n_fail": n_fail, "items": results}
 
 
@@ -3982,7 +4003,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
         signals_cache = {}
 
     results = []
-    n_ok = n_fail = 0
+    to_write: list[dict] = []   # 先收集,最後平行寫回(加速)
     for row in rows:
         sym = str(row.get("symbol") or row.get("代號") or "").strip()
         if not sym:
@@ -4013,11 +4034,9 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                     "超短線燈號":   "⚪ 資料不足",
                     "技術整理時間": f"{organized_at} (失敗)",
                 }
-                wb = sheets_writer.upsert_watchlist_item(**fail_payload)
-                n_fail += 1
+                to_write.append(fail_payload)
                 results.append({"symbol": sym, "name": name,
-                                 "error": signals.get("error"),
-                                 "written": bool(wb.get("ok"))})
+                                 "error": signals.get("error")})
                 continue
             short_light, _mom_reason = _momentum_light(signals)
             super_light = _super_short_term_light(signals)
@@ -4089,11 +4108,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
             **tech_payload,
             **fund_payload,
         }
-        wb = sheets_writer.upsert_watchlist_item(**payload)
-        if wb.get("ok"):
-            n_ok += 1
-        else:
-            n_fail += 1
+        to_write.append(payload)
         results.append({
             "symbol":            sym,
             "name":              name,
@@ -4102,8 +4117,14 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
             "chips_light":       chips_light,
             "company_light":     company_light,
             "advice":            advice,
-            "written":           bool(wb.get("ok")),
         })
+
+    # 平行寫回 Sheet(同時寫多檔,加速)
+    ok_map = _parallel_upsert(to_write, sheets_writer.upsert_watchlist_item)
+    n_ok = sum(1 for v in ok_map.values() if v)
+    n_fail = len(to_write) - n_ok
+    for r in results:
+        r["written"] = ok_map.get(str(r.get("symbol")), False)
     return {"n": len(results), "n_ok": n_ok, "n_fail": n_fail, "items": results}
 
 
