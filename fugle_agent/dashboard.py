@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 21:45  更新狀態框存起來每次重畫(換 tab 也不會消失)
+# 📅 ★最新版★ 上傳於 2026-06-02 21:55  更新狀態框移到「資料時間」下面(兩頁都畫,換tab不消失)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -433,10 +433,6 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     # ── 🌡️ 大盤順逆風(背景,全頁共用;當下算、不存)──
     st.session_state["_mkt_headwind"] = _render_market_banner()
 
-    # ── 最後一次更新狀態(存起來每次重畫,換 tab 也不會消失)──
-    _stat = st.session_state.get("_last_status")
-    if _stat:
-        {"success": st.success, "error": st.error}.get(_stat["type"], st.info)(_stat["msg"])
     # ── 📋 更新紀錄(放最上面、永遠看得到,換 tab 也不會消失)──
     if st.session_state.get("_run_log"):
         with st.expander("📋 更新紀錄", expanded=False):
@@ -560,6 +556,10 @@ def _last_update_caption(rows: list[dict]) -> None:
     if ts:
         warn += "　⚠️ 技術資料有點舊"
     st.caption(f"資料時間 — 技術 {tt} · 基本面 {ft}{warn}")
+    # 更新狀態(存在 session,每次重畫 → 換 tab、停在頁面都看得到)
+    _stat = st.session_state.get("_last_status")
+    if _stat:
+        {"success": st.success, "error": st.error}.get(_stat["type"], st.info)(_stat["msg"])
 
 
 def _render_holdings() -> None:
