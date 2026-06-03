@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 18:50  面向一 大盤順逆風(修:抓到今天那根+標資料日)
+# 📅 ★最新版★ 上傳於 2026-06-02 19:45  大盤改 Fugle 優先抓加權(IX0001)+ Yahoo 退路重試
 """大盤順逆風 — 全頁共用背景,不分個股,不存 Sheet(當下算當下用)。
 
 時間邏輯:
@@ -24,16 +24,43 @@ def _now_tw() -> datetime.datetime:
     return datetime.datetime.utcnow() + datetime.timedelta(hours=8)
 
 
-def _twii_signals() -> dict | None:
-    """回 {close, ma10, change_pct, above_ma10, date} 或 None(抓不到)。
-    ⚠️ yfinance 的 end 是開區間(不含當天),所以 to_date 要給「明天」,
-    今天那根才會被抓進來,不然會差一天(顯示昨天的漲跌)。"""
+_FUGLE_TAIEX = "IX0001"   # 發行量加權股價指數(加權)在 Fugle 的代號
+
+
+def _index_bars() -> list[dict]:
+    """回排序好的加權指數日 K 線。Fugle 優先(穩),抓不到退 Yahoo(含重試)。"""
+    # 1) Fugle(跟你的個股同源,比較穩)
+    try:
+        from fugle_agent.client import FugleClient
+        r = FugleClient().candles(_FUGLE_TAIEX)
+        bars = sorted([b for b in ((r or {}).get("data") or [])
+                       if b.get("close") is not None],
+                      key=lambda b: str(b.get("date", "")))
+        if len(bars) >= 2:
+            return bars
+    except Exception:
+        pass
+    # 2) Yahoo 退路(end 開區間 → to_date 給「明天」今天那根才進得來);抓不到重試 2 次
     tomorrow = (_now_tw().date() + datetime.timedelta(days=1)).isoformat()
-    r = us_market.candles(_TWII, to_date=tomorrow)
-    bars = [b for b in ((r or {}).get("data") or []) if b.get("close")]
+    for _ in range(2):
+        try:
+            r = us_market.candles(_TWII, to_date=tomorrow)
+            bars = sorted([b for b in ((r or {}).get("data") or [])
+                           if b.get("close") is not None],
+                          key=lambda b: str(b.get("date", "")))
+            if len(bars) >= 2:
+                return bars
+        except Exception:
+            pass
+    return []
+
+
+def _twii_signals() -> dict | None:
+    """回 {close, ma10, change_pct, above_ma10, date} 或 None(抓不到)。"""
+    bars = _index_bars()
     if len(bars) < 2:
         return None
-    closes = [b["close"] for b in bars]
+    closes = [float(b["close"]) for b in bars]
     last = closes[-1]
     prev = closes[-2]
     ma10 = sum(closes[-10:]) / min(len(closes), 10)
@@ -42,7 +69,7 @@ def _twii_signals() -> dict | None:
         "ma10": ma10,
         "change_pct": (last / prev - 1) * 100 if prev else 0.0,
         "above_ma10": last >= ma10,
-        "date": bars[-1].get("date", ""),   # 最新那根是哪天(用來確認沒抓錯天)
+        "date": str(bars[-1].get("date", ""))[:10],
     }
 
 
