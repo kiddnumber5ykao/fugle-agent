@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 20:55  「更新股價走勢」加更新紀錄(開始/跑完時間,累積顯示)
+# 📅 ★最新版★ 上傳於 2026-06-02 21:25  正在進行→已完成 即時顯示,時間加年月日
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -490,24 +490,26 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
         if st.button("⚡ 更新最新股價走勢", use_container_width=True, disabled=any_running,
                      help="直接在這台抓最新股價、重算走勢和「該做啥」(免費,不含公司面)"):
             _t0 = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-            _log = st.session_state.setdefault("_run_log", [])
-            _log.append(f"⏳ 更新股價走勢　{_t0.strftime('%H:%M:%S')} 開始")
-            with st.spinner("更新股價走勢中…(直接在這台算,稍等一下)"):
-                r = _run_technical_inline()
+            _ph = st.empty()
+            # 按下去「當下」立刻顯示這行(在開始算之前就先畫出來)
+            _ph.info(f"⏳ {_t0.strftime('%Y-%m-%d %H:%M:%S')} 正在進行 股價走勢 更新…")
+            r = _run_technical_inline()
             _t1 = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
             _secs = int((_t1 - _t0).total_seconds())
+            _log = st.session_state.setdefault("_run_log", [])
+            _log.append(f"⏳ {_t0.strftime('%Y-%m-%d %H:%M:%S')} 正在進行 股價走勢 更新")
             if r.get("ok"):
-                _log.append(f"✅ 更新股價走勢　{_t1.strftime('%H:%M:%S')} 跑完(耗時 {_secs} 秒)")
+                _log.append(f"✅ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 已完成 股價走勢 更新(耗時 {_secs} 秒)")
                 st.session_state["_run_log"] = _log[-12:]
                 st.session_state["_settings_open"] = True   # 跑完讓設定區保持展開,看得到紀錄
+                _ph.success(f"✅ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 已完成 股價走勢 更新")
                 st.cache_data.clear()
-                st.toast("✅ 股價走勢更新完成", icon="✅")
                 st.rerun()
             else:
-                _log.append(f"❌ 更新股價走勢　{_t1.strftime('%H:%M:%S')} 失敗:{r.get('error')}")
+                _log.append(f"❌ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢 更新失敗:{r.get('error')}")
                 st.session_state["_run_log"] = _log[-12:]
                 st.session_state["_settings_open"] = True
-                st.error(f"❌ 更新失敗:{r.get('error')}")
+                _ph.error(f"❌ 更新失敗:{r.get('error')}")
         # 📋 更新紀錄(每次按的開始 / 跑完時間,新的在上面)
         if st.session_state.get("_run_log"):
             st.caption("📋 更新紀錄")
