@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 21:25  正在進行→已完成 即時顯示,時間加年月日
+# 📅 ★最新版★ 上傳於 2026-06-02 21:35  更新紀錄移到頁面最上面(換 tab 也不會消失)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -433,6 +433,12 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     # ── 🌡️ 大盤順逆風(背景,全頁共用;當下算、不存)──
     st.session_state["_mkt_headwind"] = _render_market_banner()
 
+    # ── 📋 更新紀錄(放最上面、永遠看得到,換 tab 也不會消失)──
+    if st.session_state.get("_run_log"):
+        with st.expander("📋 更新紀錄", expanded=False):
+            for _line in reversed(st.session_state["_run_log"][-10:]):
+                st.caption(_line)
+
     # 跑中狀態(鎖按鈕用)
     if workflow_running:
         full_running = workflow_running("full_update.yml", "all")
@@ -510,11 +516,6 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
                 st.session_state["_run_log"] = _log[-12:]
                 st.session_state["_settings_open"] = True
                 _ph.error(f"❌ 更新失敗:{r.get('error')}")
-        # 📋 更新紀錄(每次按的開始 / 跑完時間,新的在上面)
-        if st.session_state.get("_run_log"):
-            st.caption("📋 更新紀錄")
-            for _line in reversed(st.session_state["_run_log"][-8:]):
-                st.caption(_line)
 
         st.caption("想連公司基本面重查一遍(花一點錢,一週一次就好)")
         if st.button("🔍 重查公司基本面", use_container_width=True, disabled=any_running,
