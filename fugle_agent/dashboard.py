@@ -468,7 +468,8 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
         else:
             st.error(f"❌ {r.get('error')}")
 
-    with st.expander("⚙️ 更新與設定"):
+    with st.expander("⚙️ 更新與設定",
+                     expanded=bool(st.session_state.get("_settings_open"))):
         if any_running:
             st.caption("⏳ 有更新正在跑…跑完前按鈕會鎖住")
         # 主要動作:只顯示「當前這一頁」相關的(持股↔我剛買賣股票、追蹤↔我剛加追蹤)
@@ -498,12 +499,14 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
             if r.get("ok"):
                 _log.append(f"✅ 更新股價走勢　{_t1.strftime('%H:%M:%S')} 跑完(耗時 {_secs} 秒)")
                 st.session_state["_run_log"] = _log[-12:]
+                st.session_state["_settings_open"] = True   # 跑完讓設定區保持展開,看得到紀錄
                 st.cache_data.clear()
                 st.toast("✅ 股價走勢更新完成", icon="✅")
                 st.rerun()
             else:
                 _log.append(f"❌ 更新股價走勢　{_t1.strftime('%H:%M:%S')} 失敗:{r.get('error')}")
                 st.session_state["_run_log"] = _log[-12:]
+                st.session_state["_settings_open"] = True
                 st.error(f"❌ 更新失敗:{r.get('error')}")
         # 📋 更新紀錄(每次按的開始 / 跑完時間,新的在上面)
         if st.session_state.get("_run_log"):
