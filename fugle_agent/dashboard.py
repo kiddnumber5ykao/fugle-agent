@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 21:55  更新狀態框移到「資料時間」下面(兩頁都畫,換tab不消失)
+# 📅 ★最新版★ 上傳於 2026-06-02 22:10  按下去先在「資料時間」下顯示正在進行中→跑完同處顯示完成
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -495,29 +495,14 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
         st.caption("想立刻看最新股價(免費、當場跑、幾秒~十幾秒)")
         if st.button("⚡ 更新最新股價走勢", use_container_width=True, disabled=any_running,
                      help="直接在這台抓最新股價、重算走勢和「該做啥」(免費,不含公司面)"):
+            # 第一段:只先標記「正在進行中」+ 立刻重畫(真正的計算放到 render 最後才跑,
+            # 確保「正在進行中」會先畫在「資料時間」下面給你看到)
             _t0 = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-            _ph = st.empty()
-            # 按下去「當下」立刻顯示這行(在開始算之前就先畫出來)
-            _ph.info(f"⏳ {_t0.strftime('%Y-%m-%d %H:%M:%S')} 正在進行 股價走勢 更新…")
-            r = _run_technical_inline()
-            _t1 = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-            _secs = int((_t1 - _t0).total_seconds())
-            _log = st.session_state.setdefault("_run_log", [])
-            _log.append(f"⏳ {_t0.strftime('%Y-%m-%d %H:%M:%S')} 正在進行 股價走勢 更新")
-            if r.get("ok"):
-                _done = f"✅ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 已完成 股價走勢 更新(耗時 {_secs} 秒)"
-                _log.append(_done)
-                st.session_state["_run_log"] = _log[-12:]
-                st.session_state["_last_status"] = {"type": "success", "msg": _done}
-                _ph.success(_done)
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                _fail = f"❌ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢 更新失敗:{r.get('error')}"
-                _log.append(_fail)
-                st.session_state["_run_log"] = _log[-12:]
-                st.session_state["_last_status"] = {"type": "error", "msg": _fail}
-                _ph.error(_fail)
+            st.session_state["_last_status"] = {
+                "type": "info",
+                "msg": f"⏳ {_t0.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢更新 正在進行中…"}
+            st.session_state["_pending_start"] = _t0.isoformat()
+            st.rerun()
 
         st.caption("想連公司基本面重查一遍(花一點錢,一週一次就好)")
         if st.button("🔍 重查公司基本面", use_container_width=True, disabled=any_running,
@@ -544,6 +529,28 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
                 else:
                     st.error(f"❌ {res.get('error')}")
                 st.rerun()
+
+    # 第二段:真正執行「更新股價走勢」— 放在 render 最後,
+    # 此時上面「資料時間」下的『正在進行中』已經畫出來給使用者看了,才開始算。
+    _ps = st.session_state.pop("_pending_start", None)
+    if _ps:
+        _t0 = datetime.datetime.fromisoformat(_ps)
+        r = _run_technical_inline()
+        _t1 = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+        _secs = int((_t1 - _t0).total_seconds())
+        _log = st.session_state.setdefault("_run_log", [])
+        _log.append(f"⏳ {_t0.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢更新 正在進行中")
+        if r.get("ok"):
+            _done = f"✅ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢更新 完成(耗時 {_secs} 秒)"
+            _log.append(_done)
+            st.session_state["_last_status"] = {"type": "success", "msg": _done}
+            st.cache_data.clear()
+        else:
+            _fail = f"❌ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢更新 失敗:{r.get('error')}"
+            _log.append(_fail)
+            st.session_state["_last_status"] = {"type": "error", "msg": _fail}
+        st.session_state["_run_log"] = _log[-12:]
+        st.rerun()
 
 
 def _last_update_caption(rows: list[dict]) -> None:
