@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 19:25  「更新股價走勢」當場跑 + 完成彈出通知/上次更新時間
+# 📅 ★最新版★ 上傳於 2026-06-02 20:55  「更新股價走勢」加更新紀錄(開始/跑完時間,累積顯示)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -488,20 +488,28 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
         st.caption("想立刻看最新股價(免費、當場跑、幾秒~十幾秒)")
         if st.button("⚡ 更新最新股價走勢", use_container_width=True, disabled=any_running,
                      help="直接在這台抓最新股價、重算走勢和「該做啥」(免費,不含公司面)"):
+            _t0 = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+            _log = st.session_state.setdefault("_run_log", [])
+            _log.append(f"⏳ 更新股價走勢　{_t0.strftime('%H:%M:%S')} 開始")
             with st.spinner("更新股價走勢中…(直接在這台算,稍等一下)"):
                 r = _run_technical_inline()
+            _t1 = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+            _secs = int((_t1 - _t0).total_seconds())
             if r.get("ok"):
+                _log.append(f"✅ 更新股價走勢　{_t1.strftime('%H:%M:%S')} 跑完(耗時 {_secs} 秒)")
+                st.session_state["_run_log"] = _log[-12:]
                 st.cache_data.clear()
-                st.session_state["_tech_done_at"] = (
-                    datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-                ).strftime("%H:%M:%S")
                 st.toast("✅ 股價走勢更新完成", icon="✅")
                 st.rerun()
             else:
-                st.session_state["_tech_err"] = str(r.get("error"))
+                _log.append(f"❌ 更新股價走勢　{_t1.strftime('%H:%M:%S')} 失敗:{r.get('error')}")
+                st.session_state["_run_log"] = _log[-12:]
                 st.error(f"❌ 更新失敗:{r.get('error')}")
-        if st.session_state.get("_tech_done_at"):
-            st.caption(f"🕒 上次手動更新股價:{st.session_state['_tech_done_at']}")
+        # 📋 更新紀錄(每次按的開始 / 跑完時間,新的在上面)
+        if st.session_state.get("_run_log"):
+            st.caption("📋 更新紀錄")
+            for _line in reversed(st.session_state["_run_log"][-8:]):
+                st.caption(_line)
 
         st.caption("想連公司基本面重查一遍(花一點錢,一週一次就好)")
         if st.button("🔍 重查公司基本面", use_container_width=True, disabled=any_running,
