@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 21:35  更新紀錄移到頁面最上面(換 tab 也不會消失)
+# 📅 ★最新版★ 上傳於 2026-06-02 21:45  更新狀態框存起來每次重畫(換 tab 也不會消失)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -433,6 +433,10 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     # ── 🌡️ 大盤順逆風(背景,全頁共用;當下算、不存)──
     st.session_state["_mkt_headwind"] = _render_market_banner()
 
+    # ── 最後一次更新狀態(存起來每次重畫,換 tab 也不會消失)──
+    _stat = st.session_state.get("_last_status")
+    if _stat:
+        {"success": st.success, "error": st.error}.get(_stat["type"], st.info)(_stat["msg"])
     # ── 📋 更新紀錄(放最上面、永遠看得到,換 tab 也不會消失)──
     if st.session_state.get("_run_log"):
         with st.expander("📋 更新紀錄", expanded=False):
@@ -505,17 +509,19 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
             _log = st.session_state.setdefault("_run_log", [])
             _log.append(f"⏳ {_t0.strftime('%Y-%m-%d %H:%M:%S')} 正在進行 股價走勢 更新")
             if r.get("ok"):
-                _log.append(f"✅ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 已完成 股價走勢 更新(耗時 {_secs} 秒)")
+                _done = f"✅ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 已完成 股價走勢 更新(耗時 {_secs} 秒)"
+                _log.append(_done)
                 st.session_state["_run_log"] = _log[-12:]
-                st.session_state["_settings_open"] = True   # 跑完讓設定區保持展開,看得到紀錄
-                _ph.success(f"✅ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 已完成 股價走勢 更新")
+                st.session_state["_last_status"] = {"type": "success", "msg": _done}
+                _ph.success(_done)
                 st.cache_data.clear()
                 st.rerun()
             else:
-                _log.append(f"❌ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢 更新失敗:{r.get('error')}")
+                _fail = f"❌ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢 更新失敗:{r.get('error')}"
+                _log.append(_fail)
                 st.session_state["_run_log"] = _log[-12:]
-                st.session_state["_settings_open"] = True
-                _ph.error(f"❌ 更新失敗:{r.get('error')}")
+                st.session_state["_last_status"] = {"type": "error", "msg": _fail}
+                _ph.error(_fail)
 
         st.caption("想連公司基本面重查一遍(花一點錢,一週一次就好)")
         if st.button("🔍 重查公司基本面", use_container_width=True, disabled=any_running,
