@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 22:06  (原最後更新 2026-05-29)(加 backfill_realized_names)
+# 📅 ★最新版★ 上傳於 2026-06-02 20:40  加 bulk_upsert(批次寫入,最快)
 """POST helper for the Apps Script Web App that writes to the user's
 '加油好嗎' Google Sheet.
 
@@ -71,6 +71,14 @@ def add_fund_trade(**fields) -> dict:
 
 def upsert_position(**fields) -> dict:
     return _post("upsert_position", fields)
+
+
+def bulk_upsert(tab: str, rows: list[dict], key: str = "代號",
+                timeout: int = 120) -> dict:
+    """一次把多筆 row 寫進指定分頁(批次,最快)。
+    Apps Script 端需有 bulk_upsert 動作;沒有的話呼叫端會自動退回逐筆平行。"""
+    return _post("bulk_upsert", {"tab": tab, "key": key, "rows": rows},
+                 timeout=timeout)
 
 
 def delete_position(symbol: str) -> dict:

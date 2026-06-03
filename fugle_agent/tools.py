@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 20:10  寫回 Sheet 改平行(更新股價走勢加速)+欄位改名+批次1-3
+# 📅 ★最新版★ 上傳於 2026-06-02 20:40  寫回 Sheet 改批次(最快,退回平行)+欄位改名+批次1-3
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -3788,6 +3788,21 @@ def _parallel_upsert(payloads: list[dict], writer, max_workers: int = 5) -> dict
     return out
 
 
+def _bulk_or_parallel(tab: str, payloads: list[dict], writer) -> dict:
+    """最快:一次批次寫回整批(bulk_upsert)。Apps Script 沒這動作就自動退回逐筆平行。
+    回 {代號: 是否成功}。"""
+    if not payloads:
+        return {}
+    try:
+        r = sheets_writer.bulk_upsert(tab, payloads)
+        if r and r.get("ok"):
+            return {str(p.get("symbol") or p.get("代號")): True for p in payloads}
+        print(f"⚠️ 批次寫入未成功({r.get('error') if r else 'no resp'}),改用平行", flush=True)
+    except Exception as e:
+        print(f"⚠️ 批次寫入例外,改用平行: {e}", flush=True)
+    return _parallel_upsert(payloads, writer)
+
+
 def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                             organized_at: str, fee_rate: float, fee_min: float,
                             signals_cache: dict[str, dict] | None = None,
@@ -3967,7 +3982,9 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
         })
 
     # 平行寫回 Sheet(同時寫多檔,比一筆一筆快很多)
-    ok_map = _parallel_upsert(to_write, sheets_writer.upsert_position)
+    ok_map = _bulk_or_parallel(
+        os.getenv(sheets.POSITIONS_TAB_ENV, sheets.DEFAULT_POSITIONS_TAB),
+        to_write, sheets_writer.upsert_position)
     n_ok = sum(1 for v in ok_map.values() if v)
     n_fail = len(to_write) - n_ok
     for r in results:
@@ -4120,7 +4137,9 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
         })
 
     # 平行寫回 Sheet(同時寫多檔,加速)
-    ok_map = _parallel_upsert(to_write, sheets_writer.upsert_watchlist_item)
+    ok_map = _bulk_or_parallel(
+        os.getenv(sheets.WATCHLIST_TAB_ENV, sheets.DEFAULT_WATCHLIST_TAB),
+        to_write, sheets_writer.upsert_watchlist_item)
     n_ok = sum(1 for v in ok_map.values() if v)
     n_fail = len(to_write) - n_ok
     for r in results:
