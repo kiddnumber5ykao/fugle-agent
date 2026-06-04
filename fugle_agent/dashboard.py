@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 00:21】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-05 00:34】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -874,7 +874,8 @@ def _holding_card(r: dict) -> None:
     pnl = fc.get("pnl") or {}
     pct = pnl.get("損益%")
     pct_txt = f"　{'賺' if pct >= 0 else '賠'} {abs(pct):.1f}%" if pct is not None else ""
-    label = f"{code} {name}{pct_txt}"
+    _dot = {"上市": "🔵", "上櫃": "🟠", "興櫃": "⚪"}.get(fc.get("market") or "", "")
+    label = (f"{_dot} " if _dot else "") + f"{code} {name}{pct_txt}"
     with st.expander(label):
         _detail_common(r, action)
 
@@ -886,7 +887,8 @@ def _watch_card(r: dict) -> None:
     fc = _fc_get(r)
     action = fc.get("action") or _g(r, "我該做啥", "綜合建議")
     tag = f"（{reason}）" if reason else ""
-    label = f"{code} {name}{tag}"
+    _dot = {"上市": "🔵", "上櫃": "🟠", "興櫃": "⚪"}.get(fc.get("market") or "", "")
+    label = (f"{_dot} " if _dot else "") + f"{code} {name}{tag}"
     with st.expander(label):
         _detail_common(r, action)
 
