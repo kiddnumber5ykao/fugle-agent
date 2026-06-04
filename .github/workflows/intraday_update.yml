@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-04 21:56】intraday_update.yml — ⛔ 關掉每15分自動排程(走勢已改即時算)
+# ⬆️【要上傳 2026-06-04 22:20】intraday_update.yml — ⛔ 關掉每15分自動排程(走勢已改即時算)
 name: 盤中更新 (重算+技術)
 run-name: 盤中更新 [${{ inputs.scope || 'all' }}]
 
