@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-04 20:51】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-04 20:55】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -476,33 +476,51 @@ def _market_ctx_cached() -> dict:
 
 
 @st.cache_data(ttl=25, show_spinner=False)
-def _us_indices_cached() -> dict:
-    """美股三大指數漲跌%(yfinance,延遲約 15 分)。給大盤下面那條用。"""
-    out: dict[str, float] = {}
+def _us_market_cached() -> dict:
+    """美股三大指數(yfinance,延遲約 15 分)。回 {items, date, light}。
+    light 算法跟大盤盤前一樣:三指數平均 ≥+0.5%→偏強、≤-0.5%→偏弱、其餘普通。"""
+    out: dict = {"items": {}, "date": "", "light": "🟡 普通"}
     try:
         from fugle_agent import us_market
+        asof = ""
         for zh, sym in (("費半", "^SOX"), ("標普", "^GSPC"), ("那斯達克", "^IXIC")):
             q = us_market.quote(sym)
             if isinstance(q, dict) and not q.get("error") and q.get("changePercent") is not None:
-                out[zh] = float(q["changePercent"])
+                out["items"][zh] = float(q["changePercent"])
+                if not asof and q.get("asOf"):
+                    asof = str(q["asOf"])[:10]
+        out["date"] = asof
+        if out["items"]:
+            avg = sum(out["items"].values()) / len(out["items"])
+            out["light"] = "🟢 偏強" if avg >= 0.5 else ("🔴 偏弱" if avg <= -0.5 else "🟡 普通")
     except Exception:
         pass
     return out
 
 
 def _render_us_line() -> None:
-    """大盤下面再加一條美股(費半/標普/那斯達克)。開著頁面每 30 秒一起刷;
-    美股開盤時(台北晚上)會跟著跳動(延遲約 15 分)。"""
-    us = _us_indices_cached()
-    if not us:
+    """大盤下面再加一條美股,格式跟大盤橫幅一樣(燈號 + 漲跌 + 資料日期)。
+    開著頁面每 30 秒一起刷;美股開盤(台北晚上)會跟著跳(延遲約 15 分,只到日)。"""
+    us = _us_market_cached()
+    items = us.get("items") or {}
+    if not items:
         return
+    light = us.get("light", "🟡 普通")
+    if "🔴" in light:
+        bg, bd = "rgba(226,75,74,.10)", "rgba(226,75,74,.40)"
+    elif "🟢" in light:
+        bg, bd = "rgba(99,153,34,.10)", "rgba(99,153,34,.40)"
+    else:
+        bg, bd = "rgba(127,127,127,.07)", "rgba(127,127,127,.25)"
     parts = []
-    for zh, pct in us.items():
+    for zh, pct in items.items():
         col = "var(--color-text-success)" if pct >= 0 else "var(--color-text-danger)"
         parts.append(f'{zh} <span style="color:{col};font-weight:500">{pct:+.1f}%</span>')
+    dtag = f"(資料 {us['date']}・延遲約15分)" if us.get("date") else "(延遲約15分)"
     st.markdown(
-        '<div style="font-size:12px;color:#5F5E5A;margin:-4px 0 10px 2px">'
-        '🌎 美股(延遲約15分)　' + '　·　'.join(parts) + '</div>',
+        f'<div style="background:{bg};border:0.5px solid {bd};border-radius:10px;'
+        f'padding:8px 12px;margin-bottom:10px;font-size:13px">'
+        f'🌎 <b>美股：{light}</b>　' + ' · '.join(parts) + f'　{dtag}</div>',
         unsafe_allow_html=True)
 
 
