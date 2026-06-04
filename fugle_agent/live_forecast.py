@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 00:47】live_forecast.py — 即時組裝 + 上市/上櫃標示
+# ⬆️【要上傳 2026-06-05 00:50】live_forecast.py — 即時組裝 + 上市/上櫃標示
 """即時組裝層 —— 打開頁面當下,把每檔的「此刻最新數字」抓齊,餵給 forecasts 引擎。
 
 分工:
@@ -182,15 +182,7 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
                               headwind=bool(msnap.get("headwind")))
     res["pnl"] = _compute_pnl(sym, last_price, shares, total_cost, fee_rate, fee_min)
     res["price"] = round(last_price, 2) if last_price is not None else None
-    # 市場別:優先用官方清單(證交所=上市 / 櫃買=上櫃,幾乎每檔普通股都查得到),
-    # Fugle 報價欄位只當備援(常常是空的)。
-    mkt = ""
-    try:
-        from . import free_fetch
-        mkt = free_fetch.get_market(sym) or ""
-    except Exception:
-        mkt = ""
-    res["market"] = mkt or _market_label(quote)
+    res["market"] = _market_label(quote)
     try:
         from . import market_context
         res["data_time"] = market_context._fugle_data_time(quote)
@@ -209,12 +201,6 @@ def prefetch(items: list[tuple[str, int, float]], *, is_holding: bool,
     if not syms:
         return out
     msnap = market_snapshot()
-    # 先把官方上市/上櫃清單抓好一次(process 內快取),避免等下每個工作緒各抓一遍
-    try:
-        from . import free_fetch
-        free_fetch.get_market(syms[0][0])
-    except Exception:
-        pass
 
     def _one(t):
         s, sh, tc = t
