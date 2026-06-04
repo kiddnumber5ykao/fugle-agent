@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-03 23:20  更新狀態改「分頁獨立」:持股/追蹤各自顯示、各自只更新自己
+# 📅 ★最新版★ 上傳於 2026-06-03 23:50  資料時間後面加失敗檔數;分頁獨立狀態(未含快取)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -373,6 +373,18 @@ def _run_technical_inline(scope: str = "all") -> dict:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+@st.cache_data(ttl=90, show_spinner=False)
+def _cached_tab(tab: str) -> list:
+    """讀 Sheet 分頁(暫存 90 秒)→ 切 tab/互動時不用每次重抓,大幅減少 lag。
+    按更新或🔁重新整理會清快取,所以拿得到最新。"""
+    return sheets.fetch_tab(tab)
+
+
+@st.cache_data(ttl=90, show_spinner=False)
+def _cached_watchlist() -> list:
+    return sheets.load_watchlist()
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def _market_ctx_cached() -> dict:
     """大盤順逆風(快取 15 分,避免每次互動都重抓 yfinance)。"""
@@ -434,14 +446,21 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     st.session_state["_mkt_headwind"] = _render_market_banner()
 
 
-    # 跑中狀態(鎖按鈕用)
-    if workflow_running:
-        full_running = workflow_running("full_update.yml", "all")
-        intra_running = workflow_running("intraday_update.yml", "all")
-        pos_running = workflow_running("full_update.yml", "positions_new")
-        wl_running = workflow_running("full_update.yml", "watchlist_new")
-    else:
-        full_running = intra_running = pos_running = wl_running = False
+    # 跑中狀態(鎖按鈕用)— 每次都問 GitHub 4 次很慢,改成「最多 20 秒問一次」,
+    # 中間用上次的結果(切 tab/互動就不會卡在等 GitHub 回應)
+    import time as _time
+    _wr = st.session_state.get("_wr_cache")
+    if workflow_running and (not _wr or _time.time() - _wr.get("ts", 0) > 20):
+        _wr = {"ts": _time.time(),
+               "full":  workflow_running("full_update.yml", "all"),
+               "intra": workflow_running("intraday_update.yml", "all"),
+               "pos":   workflow_running("full_update.yml", "positions_new"),
+               "wl":    workflow_running("full_update.yml", "watchlist_new")}
+        st.session_state["_wr_cache"] = _wr
+    elif not workflow_running:
+        _wr = {"full": False, "intra": False, "pos": False, "wl": False}
+    full_running, intra_running = _wr["full"], _wr["intra"]
+    pos_running, wl_running = _wr["pos"], _wr["wl"]
     any_running = full_running or intra_running or pos_running or wl_running
 
     # ── 主畫面:每檔股票一張卡,要動手的在最上面 ──
@@ -556,7 +575,14 @@ def _last_update_caption(rows: list[dict], mode: str = "持有") -> None:
     warn = ""
     if ts:
         warn += "　⚠️ 技術資料有點舊"
-    st.caption(f"資料時間 — 技術 {tt} · 基本面 {ft}{warn}")
+    # 數一下「沒更新成功」的檔數:時間欄寫(失敗) 或 燈號是⚪資料不足
+    def _bad(r, tcol, lcol):
+        return ("失敗" in _g(r, tcol)) or ("資料不足" in _g(r, lcol))
+    n_bad_t = sum(1 for r in rows if _bad(r, "技術資料時間", "短線燈號"))
+    n_bad_f = sum(1 for r in rows if _bad(r, "基本面資料時間", "公司面燈號"))
+    bt = f"(❌{n_bad_t} 檔失敗)" if n_bad_t else ""
+    bf = f"(❌{n_bad_f} 檔失敗)" if n_bad_f else ""
+    st.caption(f"資料時間 — 技術 {tt}{bt} · 基本面 {ft}{bf}{warn}")
     # 更新狀態:每一頁(持有/追蹤)各自獨立,只顯示「這一頁」的狀態
     _stat = st.session_state.get(f"_last_status_{mode}")
     if _stat:
@@ -566,7 +592,7 @@ def _last_update_caption(rows: list[dict], mode: str = "持有") -> None:
 def _render_holdings() -> None:
     tab = os.getenv("PORTFOLIO_POSITIONS_TAB", sheets.DEFAULT_POSITIONS_TAB)
     try:
-        rows = [r for r in (sheets.fetch_tab(tab) or [])
+        rows = [r for r in (_cached_tab(tab) or [])
                 if not r.get("_error") and _g(r, "代號", "symbol")]
     except Exception as e:
         st.error(f"讀股票部位失敗:{e}")
@@ -580,7 +606,7 @@ def _render_holdings() -> None:
 
 def _render_watchlist() -> None:
     try:
-        rows = [r for r in (sheets.load_watchlist() or [])
+        rows = [r for r in (_cached_watchlist() or [])
                 if not r.get("_error") and _g(r, "代號", "symbol")]
     except Exception as e:
         st.error(f"讀追蹤清單失敗:{e}")
@@ -595,7 +621,7 @@ def _render_watchlist() -> None:
 def _render_totals() -> None:
     tab = os.getenv("PORTFOLIO_POSITIONS_TAB", sheets.DEFAULT_POSITIONS_TAB)
     try:
-        rows = [r for r in (sheets.fetch_tab(tab) or []) if not r.get("_error")]
+        rows = [r for r in (_cached_tab(tab) or []) if not r.get("_error")]
     except Exception:
         rows = []
     cost = sum(_num(_g(r, "總成本")) or 0 for r in rows)
@@ -804,7 +830,7 @@ def _detail_common(r: dict, adv: str) -> None:
 def _realized_total() -> float:
     try:
         total = 0.0
-        for r in (sheets.fetch_tab("實際損益") or []):
+        for r in (_cached_tab("實際損益") or []):
             if r.get("_error"):
                 continue
             v = _num(_g(r, "實際損益", "realized_pnl"))
