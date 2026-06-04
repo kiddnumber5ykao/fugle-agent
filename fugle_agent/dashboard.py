@@ -1,4 +1,4 @@
-# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1.1】dashboard.py — 卡片改版 + 按鈕進度(正在/完成於,分頁獨立、重整不丟)
+# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1.2】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -813,7 +813,9 @@ def _holding_card(r: dict) -> None:
     pnl = fc.get("pnl") or {}
     pct = pnl.get("損益%")
     pct_txt = f"　{'賺' if pct >= 0 else '賠'} {abs(pct):.1f}%" if pct is not None else ""
-    label = f"{icon} {label_w}　{code} {name}{pct_txt}"
+    mkt = fc.get("market") or ""
+    code_txt = f"{code}·{mkt}" if mkt else code
+    label = f"{icon} {label_w}　{code_txt} {name}{pct_txt}"
     with st.expander(label):
         _detail_common(r, action)
 
@@ -825,8 +827,10 @@ def _watch_card(r: dict) -> None:
     fc = _fc_get(r)
     action = fc.get("action") or _g(r, "我該做啥", "綜合建議")
     icon, label_w = _fc_label(action)
+    mkt = fc.get("market") or ""
+    code_txt = f"{code}·{mkt}" if mkt else code
     tag = f"（{reason}）" if reason else ""
-    label = f"{icon} {label_w}　{code} {name}{tag}"
+    label = f"{icon} {label_w}　{code_txt} {name}{tag}"
     with st.expander(label):
         _detail_common(r, action)
 
@@ -874,8 +878,11 @@ def _detail_common(r: dict, action: str) -> None:
     price = fc.get("price")
     pnl = fc.get("pnl") or {}
     dt = fc.get("data_time")
+    mkt = fc.get("market") or ""
     if price is not None:
         line = f'💲 <b>現價</b>　{price:g}'
+        if mkt:
+            line += f'　<span style="{mut};font-size:12px">{mkt}</span>'
         if pnl.get("損益%") is not None:
             v = pnl["損益%"]
             col = "var(--color-text-success)" if v >= 0 else "var(--color-text-danger)"

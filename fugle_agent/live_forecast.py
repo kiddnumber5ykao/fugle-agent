@@ -1,4 +1,4 @@
-# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1】live_forecast.py — 即時組裝
+# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1.1】live_forecast.py — 即時組裝 + 上市/上櫃標示
 """即時組裝層 —— 打開頁面當下,把每檔的「此刻最新數字」抓齊,餵給 forecasts 引擎。
 
 分工:
@@ -25,6 +25,18 @@ def _sign(x: Any) -> Optional[int]:
     if n is None:
         return None
     return 1 if n > 0 else (-1 if n < 0 else 0)
+
+
+def _market_label(quote: dict) -> str:
+    """從 Fugle 報價的市場別欄位判斷 上市/上櫃/興櫃。判不出回 ""。"""
+    m = str((quote or {}).get("market") or (quote or {}).get("exchange") or "").upper().strip()
+    if m in ("TSE", "TWSE", "TWS", "LISTED", "TW"):
+        return "上市"
+    if m in ("OTC", "TPEX", "OTCEX", "ROTC", "TWO"):
+        return "上櫃"
+    if m in ("ESB", "EMERGING", "EMERGINGSTOCK", "ROTC2"):
+        return "興櫃"
+    return ""
 
 
 def _now_tw_date() -> datetime.date:
@@ -170,6 +182,7 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
                               headwind=bool(msnap.get("headwind")))
     res["pnl"] = _compute_pnl(sym, last_price, shares, total_cost, fee_rate, fee_min)
     res["price"] = round(last_price, 2) if last_price is not None else None
+    res["market"] = _market_label(quote)
     try:
         from . import market_context
         res["data_time"] = market_context._fugle_data_time(quote)
