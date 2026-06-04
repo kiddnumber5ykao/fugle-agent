@@ -385,9 +385,10 @@ def _cached_watchlist() -> list:
     return sheets.load_watchlist()
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=25, show_spinner=False)
 def _market_ctx_cached() -> dict:
-    """大盤順逆風(快取 15 分,避免每次互動都重抓 yfinance)。"""
+    """大盤順逆風。快取 25 秒(< 橫幅自動刷新的 30 秒),
+    讓每次自動刷新都拿到新的即時指數,又能讓同一秒的多次互動共用、不重打。"""
     try:
         from fugle_agent import market_context
         return market_context.get_market_context()
@@ -402,6 +403,12 @@ def _render_market_banner() -> bool:
     head = bool(ctx.get("is_headwind"))
     light = ctx.get("light", "🟡 普通")
     reason = ctx.get("reason", "")
+    # 跟卡片下方「資料時間」同一種相對講法(剛剛/X分前),三處用法一致。
+    upd = ctx.get("updated", "")
+    if upd:
+        rel, _ = _rel_time(upd, 60 * 24)
+        if rel and rel != "尚未更新":
+            reason = f"{reason} · 更新 {rel}"
     if head:
         bg, bd = "rgba(226,75,74,.10)", "rgba(226,75,74,.40)"
     elif "🟢" in light:
@@ -414,6 +421,13 @@ def _render_market_banner() -> bool:
         f'🌡️ <b>大盤：{light}</b>　{reason}</div>',
         unsafe_allow_html=True)
     return head
+
+
+@st.fragment(run_every="30s")
+def _market_banner_fragment() -> None:
+    """只讓『大盤橫幅』這一塊每 30 秒自己重算重畫,其他區塊不跟著重跑
+    (避免整頁刷新造成 lag)。順便把逆風狀態寫進 session_state 給買進煞車用。"""
+    st.session_state["_mkt_headwind"] = _render_market_banner()
 
 
 def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
@@ -443,7 +457,10 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     mode = "持有" if mode == "我的持股" else "追蹤"
 
     # ── 🌡️ 大盤順逆風(背景,全頁共用;當下算、不存)──
-    st.session_state["_mkt_headwind"] = _render_market_banner()
+    # 每次打開 → 短快取(25 秒)保證是最新即時指數;開著時 → 每 30 秒自動刷新這條。
+    if "_mkt_headwind" not in st.session_state:
+        st.session_state["_mkt_headwind"] = False
+    _market_banner_fragment()
 
 
     # 跑中狀態(鎖按鈕用)— 每次都問 GitHub 4 次很慢,改成「最多 20 秒問一次」,
