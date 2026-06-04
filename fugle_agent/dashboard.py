@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-04 22:20】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-04 22:32】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -992,10 +992,10 @@ def _detail_common(r: dict, action: str) -> None:
         st.markdown('<div style="margin-top:10px;border-top:0.5px solid rgba(127,127,127,.2);'
                     f'padding-top:8px">👉 <b>怎麼辦</b>　{act}</div>', unsafe_allow_html=True)
 
-    # 4) 關於這檔(備註區):公司在幹嘛 + 新聞 + 估值/配息/營收
+    # 4) 關於這檔(備註區):體質(最上面、最顯眼)→ 公司在幹嘛 → 新聞 → 估值/配息/營收
+    health = _g(r, "公司體質")
     about = _g(r, "公司簡介")
     items = [
-        ("公司", about),
         ("新聞", _g(r, "新聞", "近期新聞重點")),
         ("估值", _g(r, "估值")),
         ("配息", _g(r, "配息")),
@@ -1005,9 +1005,16 @@ def _detail_common(r: dict, action: str) -> None:
         f'<div style="display:flex;gap:8px;font-size:13px;padding:2px 0">'
         f'<span style="{mut};min-width:34px">{k}</span><span>{v}</span></div>'
         for k, v in items if v)
-    if body:
-        st.markdown('<div style="margin-top:12px">📋 <b>關於這檔</b></div>' + body,
-                    unsafe_allow_html=True)
+    if health or about or body:
+        st.markdown('<div style="margin-top:12px">📋 <b>關於這檔</b></div>', unsafe_allow_html=True)
+        if health:
+            st.markdown(f'<div style="font-size:15px;font-weight:500;margin:4px 0 2px">{health}</div>',
+                        unsafe_allow_html=True)
+        if about:
+            st.markdown(f'<div style="{mut};font-size:13px;margin-bottom:4px">🏢 {about}</div>',
+                        unsafe_allow_html=True)
+        if body:
+            st.markdown(body, unsafe_allow_html=True)
         ft, fs = _rel_time(_g(r, "公司更新時間", "基本面資料時間"), 60 * 24 * 5)
         st.caption(f"公司資料 {ft}{' ⚠️舊' if fs else ''}")
 

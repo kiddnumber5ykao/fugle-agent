@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-04 22:20】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
+# ⬆️【要上傳 2026-06-04 22:32】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -2962,7 +2962,8 @@ JSON 格式(每個欄位都要):
   "revenue": "營收動能白話描述",
   "revenue_score": int,
   "news": "近期新聞重點(一句話)",
-  "news_score": int
+  "news_score": int,
+  "health_summary": "用一句白話總結這家公司的體質(綜合賺不賺錢、生意有沒有成長、有沒有配息、貴不貴),不要數字、像跟朋友講,例如「會賺錢、生意有成長,只是現在價位偏貴」"
 }
 
 評分標準(全部 int,依使用者給的數字判斷):
@@ -3151,6 +3152,7 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
         return _store_and_return({
             "ok":                  True,
             "about":               str(data.get("about", "")).strip(),
+            "health_summary":      str(data.get("health_summary", "")).strip(),
             "estimate":            str(data.get("estimate", "資料不足")),
             "dividend":            str(data.get("dividend", "資料不足")),
             "revenue":             _revenue,
@@ -3199,6 +3201,37 @@ def _safe_int(v) -> int:
         return int(float(str(v).strip().replace("+", "")))
     except (ValueError, TypeError):
         return 0
+
+
+# 公司體質 5 等級(好→差)。用估值/配息/營收三項好壞加總分級。
+_HEALTH_LEVELS = [(3, "💎", "頂尖"), (1, "💪", "強健"),
+                  (-1, "🆗", "普通"), (-3, "⚠️", "偏弱"), (-99, "🆘", "危險")]
+
+
+def _company_health(fd: dict, sym: str) -> str:
+    """回一行「公司體質」字串:符號 + 等級 + 白話。給「關於這檔」最上面顯示。
+    ETF / 資料不足有專屬處理,永不從不足的資料硬評。"""
+    if sym.startswith("00") and len(sym) >= 4:
+        return "🧺 ETF　一籃子股票,沒有單一公司體質,主要看殖利率/折溢價"
+    if not fd.get("ok"):
+        return "📋 資料不足　查不到公司資料,先看技術面三盞燈"
+    missing = sum(1 for k in ("estimate", "dividend", "revenue")
+                  if ("資料不足" in str(fd.get(k, "")) or "待補" in str(fd.get(k, ""))))
+    if missing >= 2:
+        return "📋 資料不足　查不到足夠的估值/營收,先看技術面三盞燈"
+    score = (_safe_int(fd.get("estimate_score")) + _safe_int(fd.get("dividend_score"))
+             + _safe_int(fd.get("revenue_score")))
+    symbol, name = "🆘", "危險"
+    for thr, sym_i, name_i in _HEALTH_LEVELS:
+        if score >= thr:
+            symbol, name = sym_i, name_i
+            break
+    summary = str(fd.get("health_summary", "")).strip()
+    if not summary:                       # 後備:用估值/配息/營收白話拼一句
+        parts = [str(fd.get(k, "")).strip() for k in ("estimate", "dividend", "revenue")
+                 if fd.get(k) and "資料不足" not in str(fd.get(k, ""))]
+        summary = "、".join(parts[:3])
+    return f"{symbol} 體質{name}　{summary}".strip()
 
 
 _COMPUTE_PARALLEL_WORKERS = 3   # 技術分析 Fugle K 線抓取並行數 (改低點避免 Fugle 429)
@@ -3983,6 +4016,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                 company_light = _company_light_v2(fd)
                 fund_payload = {
                     "公司簡介":        fd.get("about", ""),
+                    "公司體質":        _company_health(fd, sym),
                     "估值":           fd["estimate"],
                     "配息":           fd["dividend"],
                     "營收動能":        fd["revenue"],
@@ -4140,6 +4174,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                 company_light = _company_light_v2(fd)
                 fund_payload = {
                     "公司簡介":        fd.get("about", ""),
+                    "公司體質":        _company_health(fd, sym),
                     "估值":           fd["estimate"],
                     "配息":           fd["dividend"],
                     "營收動能":        fd["revenue"],
