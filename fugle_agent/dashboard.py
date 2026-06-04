@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-04 23:13】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-04 23:48】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -608,22 +608,22 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     _market_banner_fragment()
 
 
-    # 跑中狀態(鎖按鈕用)— 每次都問 GitHub 4 次很慢,改成「最多 20 秒問一次」,
-    # 中間用上次的結果(切 tab/互動就不會卡在等 GitHub 回應)
+    # 跑中狀態(鎖按鈕用)— 每頁各自獨立:持股看 positions 系列、追蹤看 watchlist 系列。
+    # 問 GitHub 慢,所以「最多 20 秒問一次」,中間用上次的結果。
     import time as _time
     _wr = st.session_state.get("_wr_cache")
     if workflow_running and (not _wr or _time.time() - _wr.get("ts", 0) > 20):
         _wr = {"ts": _time.time(),
-               "full":  workflow_running("full_update.yml", "all"),
-               "intra": workflow_running("intraday_update.yml", "all"),
-               "pos":   workflow_running("full_update.yml", "positions_new"),
-               "wl":    workflow_running("full_update.yml", "watchlist_new")}
+               "pos": (workflow_running("full_update.yml", "positions")
+                       or workflow_running("full_update.yml", "positions_new")),
+               "wl":  (workflow_running("full_update.yml", "watchlist")
+                       or workflow_running("full_update.yml", "watchlist_new"))}
         st.session_state["_wr_cache"] = _wr
     elif not workflow_running:
-        _wr = {"full": False, "intra": False, "pos": False, "wl": False}
-    full_running, intra_running = _wr["full"], _wr["intra"]
-    pos_running, wl_running = _wr["pos"], _wr["wl"]
-    any_running = full_running or intra_running or pos_running or wl_running
+        _wr = {"pos": False, "wl": False}
+    pos_running, wl_running = _wr.get("pos", False), _wr.get("wl", False)
+    # 「這一頁」有沒有在跑(持股看 pos、追蹤看 wl)→ 只鎖這一頁的按鈕,兩頁互不影響
+    page_running = pos_running if mode == "持有" else wl_running
 
     # ── 主畫面:每檔股票一張卡,要動手的在最上面 ──
     if mode == "持有":
@@ -653,35 +653,39 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
 
     with st.expander("⚙️ 更新與設定",
                      expanded=bool(st.session_state.get("_settings_open"))):
-        if any_running:
-            st.caption("⏳ 有更新正在跑…跑完前按鈕會鎖住")
-        # 主要動作:只顯示「當前這一頁」相關的(持股↔我剛買賣股票、追蹤↔我剛加追蹤)
+        if page_running:
+            st.caption(f"⏳ {mode}這頁有更新正在跑…跑完前這頁按鈕會鎖住(另一頁不受影響)")
+        # 每一頁的操作只動「這一頁」:持股→positions、追蹤→watchlist
         if mode == "持有":
             st.caption("在『股票交易』加好交易後按這個(從交易重算持股)")
-            if st.button("＋ 我剛買賣股票", use_container_width=True, disabled=any_running,
+            if st.button("＋ 我剛買賣股票", use_container_width=True, disabled=page_running,
                          help="從『股票交易』重算持股的股數/成本;全新股票順便補公司資訊"
                               "(花一點點 AI)。賺賠和三盞燈是即時算的,不用按。"):
                 _after(trigger_workflow("full_update.yml", inputs={"scope": "positions_new"}),
                        "full_update", 900, "已開始更新持股(背景跑)",
                        act_mode="持有", act_name="重算持股")
+            st.caption("更新『持股』的公司資訊:體質/估值/配息/營收/新聞/簡介(會花一點 AI 錢)。")
+            if st.button("🔄 更新持股公司資訊", use_container_width=True, disabled=page_running,
+                         help="重算所有『持股』的公司資訊(體質/估值/配息/營收/新聞/簡介,花一點 AI)。"
+                              "三盞燈是即時算的,不受這個影響。"):
+                _after(trigger_workflow("full_update.yml", inputs={"scope": "positions"}),
+                       "full_update", 900, "已開始更新持股公司資訊(背景跑)",
+                       act_mode="持有", act_name="更新持股公司資訊")
         else:
             st.caption("在『追蹤清單』加好代號後按這個")
-            if st.button("＋ 我剛加追蹤", use_container_width=True, disabled=any_running,
+            if st.button("＋ 我剛加追蹤", use_container_width=True, disabled=page_running,
                          help="幫追蹤清單裡新加的那幾檔算公司資訊:體質/估值/配息/營收/新聞"
                               "(花一點 AI)。三盞燈是即時算的,不用按。"):
                 _after(trigger_workflow("full_update.yml", inputs={"scope": "watchlist_new"}),
                        "full_update", 900, "已開始分析新追蹤(背景跑)",
                        act_mode="追蹤", act_name="分析新追蹤")
-
-        st.caption("更新公司資訊:體質/估值/配息/營收/新聞/簡介(會花一點 AI 錢,一週一次就夠)。"
-                   "三盞燈是即時的、不用按。")
-        if st.button("🔄 更新公司資訊(體質/估值/配息/營收/新聞)",
-                     use_container_width=True, disabled=any_running,
-                     help="重算所有持股與追蹤的公司資訊:公司體質、估值、配息、營收、新聞、公司簡介"
-                          "(會花一點 AI 錢)。三盞燈是即時算的,不受這個影響。"):
-            _after(trigger_workflow("full_update.yml", inputs={"scope": "all"}),
-                   "full_update", 900, "已開始更新公司資訊(背景跑)",
-                   act_mode=mode, act_name="更新公司資訊")
+            st.caption("更新『追蹤』的公司資訊:體質/估值/配息/營收/新聞/簡介(會花一點 AI 錢)。")
+            if st.button("🔄 更新追蹤公司資訊", use_container_width=True, disabled=page_running,
+                         help="重算所有『追蹤』的公司資訊(體質/估值/配息/營收/新聞/簡介,花一點 AI)。"
+                              "三盞燈是即時算的,不受這個影響。"):
+                _after(trigger_workflow("full_update.yml", inputs={"scope": "watchlist"}),
+                       "full_update", 900, "已開始更新追蹤公司資訊(背景跑)",
+                       act_mode="追蹤", act_name="更新追蹤公司資訊")
 
         t1, t2 = st.columns(2)
         with t1:
@@ -742,7 +746,7 @@ def _render_tab_status(mode: str) -> None:
     進行中與完成都靠 GitHub 真實狀態判斷,所以重新整理頁面也不會丟、兩頁互不影響。"""
     act = st.session_state.get(f"_act_{mode}")
     wr = st.session_state.get("_wr_cache") or {}
-    tab_running = bool(wr.get("pos" if mode == "持有" else "wl")) or bool(wr.get("full"))
+    tab_running = bool(wr.get("pos" if mode == "持有" else "wl"))
 
     # 沒有按過紀錄、但 GitHub 顯示這頁有工作在跑(可能剛 F5 過)→ 仍顯示進行中
     if not act:

@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-04 23:13】us_market.py — 加美股最新資料時間(到分,台北)
+# ⬆️【要上傳 2026-06-04 23:48】us_market.py — 加美股最新資料時間(到分,台北)
 """US / global stock data + per-ticker news via yfinance.
 
 Covers:
