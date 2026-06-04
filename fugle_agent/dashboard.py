@@ -1,4 +1,4 @@
-# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1】dashboard.py — 卡片改三盞預測+怎麼辦+關於這檔
+# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1.1】dashboard.py — 卡片改版 + 按鈕進度(正在/完成於,分頁獨立、重整不丟)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -571,10 +571,11 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
             _render_totals()
 
     # ── ⚙️ 更新與設定(按鈕都收這)──
-    def _after(r, key, secs, ok_msg):
+    def _after(r, key, secs, ok_msg, act_mode=None, act_name=None):
         if r.get("ok"):
             mark_job_started(key, secs)
-            st.success(f"✅ {ok_msg}")
+            if act_mode and act_name:
+                _mark_action(act_mode, act_name)   # 記在那一頁的進度(含開始時間)
             st.rerun()
         else:
             st.error(f"❌ {r.get('error')}")
@@ -589,13 +590,15 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
             if st.button("＋ 我剛買賣股票", use_container_width=True, disabled=any_running,
                          help="用股票交易重算持股、賺賠;只幫全新股票補公司面"):
                 _after(trigger_workflow("full_update.yml", inputs={"scope": "positions_new"}),
-                       "full_update", 900, "已開始更新持股(背景跑)")
+                       "full_update", 900, "已開始更新持股(背景跑)",
+                       act_mode="持有", act_name="重算持股")
         else:
             st.caption("加完追蹤按這個(免費)")
             if st.button("＋ 我剛加追蹤", use_container_width=True, disabled=any_running,
                          help="只分析追蹤清單裡新加的那幾檔"):
                 _after(trigger_workflow("full_update.yml", inputs={"scope": "watchlist_new"}),
-                       "full_update", 900, "已開始分析新追蹤(背景跑)")
+                       "full_update", 900, "已開始分析新追蹤(背景跑)",
+                       act_mode="追蹤", act_name="分析新追蹤")
 
         st.caption("想立刻看最新股價(免費、當場跑、幾秒~十幾秒)")
         if st.button("⚡ 更新最新股價走勢", use_container_width=True, disabled=any_running,
@@ -603,9 +606,7 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
             # 第一段:只先標記「正在進行中」(存在「當前這一頁」的 key)+ 立刻重畫,
             # 真正的計算放到 render 最後才跑,確保「正在進行中」先畫在這一頁的「資料時間」下
             _t0 = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-            st.session_state[f"_last_status_{mode}"] = {
-                "type": "info",
-                "msg": f"⏳ {_t0.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢更新 正在進行中…"}
+            _mark_action(mode, "更新股價走勢")
             st.session_state["_pending_start"] = _t0.isoformat()
             st.session_state["_pending_mode"] = mode
             st.rerun()
@@ -614,7 +615,8 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
         if st.button("🔍 重查公司基本面", use_container_width=True, disabled=any_running,
                      help="重查公司估值/配息/營收/法人/新聞(會花一點錢)"):
             _after(trigger_workflow("full_update.yml", inputs={"scope": "all"}),
-                   "full_update", 900, "已開始重查公司基本面(背景跑)")
+                   "full_update", 900, "已開始重查公司基本面(背景跑)",
+                   act_mode=mode, act_name="重查公司基本面")
 
         _repo = os.getenv("GITHUB_REPO", "kiddnumber5ykao/fugle-agent")
         st.markdown(
@@ -643,17 +645,12 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     _pm = st.session_state.pop("_pending_mode", None)
     if _ps and _pm:
         _scope = "positions" if _pm == "持有" else "watchlist"
-        _t0 = datetime.datetime.fromisoformat(_ps)
         r = _run_technical_inline(_scope)
-        _t1 = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-        _secs = int((_t1 - _t0).total_seconds())
         if r.get("ok"):
-            _done = f"✅ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢更新 完成(耗時 {_secs} 秒)"
-            st.session_state[f"_last_status_{_pm}"] = {"type": "success", "msg": _done}
+            _mark_action_done(_pm, ok=True)
             st.cache_data.clear()
         else:
-            _fail = f"❌ {_t1.strftime('%Y-%m-%d %H:%M:%S')} 股價走勢更新 失敗:{r.get('error')}"
-            st.session_state[f"_last_status_{_pm}"] = {"type": "error", "msg": _fail}
+            _mark_action_done(_pm, ok=False, err=str(r.get("error", "")))
         st.rerun()
 
 
@@ -664,10 +661,61 @@ def _last_update_caption(rows: list[dict], mode: str = "持有") -> None:
     ft, fs = _rel_time(fund, 60 * 24 * 5)
     warn = "　⚠️ 有點舊,可跑深度分析刷新" if fs else ""
     st.caption(f"三盞預測即時算　·　公司資料 {ft}{warn}")
-    # 更新狀態:每一頁(持有/追蹤)各自獨立,只顯示「這一頁」的狀態
-    _stat = st.session_state.get(f"_last_status_{mode}")
-    if _stat:
-        {"success": st.success, "error": st.error}.get(_stat["type"], st.info)(_stat["msg"])
+    # 按鈕進度(每一頁各自獨立,跑完/重整都不丟)
+    _render_tab_status(mode)
+
+
+def _now_tw_str() -> str:
+    return (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _mark_action(mode: str, name: str) -> None:
+    """按鈕按下去 → 記在「這一頁」的進度(含開始時間,到秒)。"""
+    st.session_state[f"_act_{mode}"] = {"name": name, "started": _now_tw_str(),
+                                        "state": "running", "finished": "", "err": ""}
+
+
+def _mark_action_done(mode: str, ok: bool = True, err: str = "") -> None:
+    act = st.session_state.get(f"_act_{mode}")
+    if not act:
+        return
+    act["state"] = "done" if ok else "fail"
+    act["finished"] = _now_tw_str()
+    act["err"] = err
+    st.session_state[f"_act_{mode}"] = act
+
+
+def _render_tab_status(mode: str) -> None:
+    """顯示「這一頁」最近一次按鈕的進度:⏳ 正在 …(開始於 時間)/ ✅ … 完成於 時間。
+    進行中與完成都靠 GitHub 真實狀態判斷,所以重新整理頁面也不會丟、兩頁互不影響。"""
+    act = st.session_state.get(f"_act_{mode}")
+    wr = st.session_state.get("_wr_cache") or {}
+    tab_running = bool(wr.get("pos" if mode == "持有" else "wl")) or bool(wr.get("full"))
+
+    # 沒有按過紀錄、但 GitHub 顯示這頁有工作在跑(可能剛 F5 過)→ 仍顯示進行中
+    if not act:
+        if tab_running:
+            st.info("⏳ 這一頁有更新正在跑…(重整也擋得住)")
+        return
+
+    if act.get("state") == "running":
+        buffering = False           # 剛按下去 30 秒內:GitHub 可能還沒登記,先當進行中
+        try:
+            t0 = datetime.datetime.strptime(act["started"], "%Y-%m-%d %H:%M:%S")
+            buffering = ((datetime.datetime.utcnow() + datetime.timedelta(hours=8) - t0)
+                         .total_seconds() < 30)
+        except Exception:
+            pass
+        if tab_running or buffering:
+            st.info(f"⏳ 正在{act['name']}…（開始於 {act['started']}）")
+        else:
+            _mark_action_done(mode, ok=True)
+            act = st.session_state[f"_act_{mode}"]
+            st.success(f"✅ {act['name']} 完成於 {act['finished']}")
+    elif act.get("state") == "fail":
+        st.error(f"❌ {act['name']} 失敗於 {act.get('finished', '')}：{act.get('err', '')}")
+    else:
+        st.success(f"✅ {act['name']} 完成於 {act.get('finished', '')}")
 
 
 def _render_holdings() -> None:
