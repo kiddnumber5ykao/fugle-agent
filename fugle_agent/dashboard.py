@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-04 19:47】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-04 20:51】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -475,6 +475,37 @@ def _market_ctx_cached() -> dict:
                 "reason": "大盤資料抓不到,當作普通", "updated": ""}
 
 
+@st.cache_data(ttl=25, show_spinner=False)
+def _us_indices_cached() -> dict:
+    """美股三大指數漲跌%(yfinance,延遲約 15 分)。給大盤下面那條用。"""
+    out: dict[str, float] = {}
+    try:
+        from fugle_agent import us_market
+        for zh, sym in (("費半", "^SOX"), ("標普", "^GSPC"), ("那斯達克", "^IXIC")):
+            q = us_market.quote(sym)
+            if isinstance(q, dict) and not q.get("error") and q.get("changePercent") is not None:
+                out[zh] = float(q["changePercent"])
+    except Exception:
+        pass
+    return out
+
+
+def _render_us_line() -> None:
+    """大盤下面再加一條美股(費半/標普/那斯達克)。開著頁面每 30 秒一起刷;
+    美股開盤時(台北晚上)會跟著跳動(延遲約 15 分)。"""
+    us = _us_indices_cached()
+    if not us:
+        return
+    parts = []
+    for zh, pct in us.items():
+        col = "var(--color-text-success)" if pct >= 0 else "var(--color-text-danger)"
+        parts.append(f'{zh} <span style="color:{col};font-weight:500">{pct:+.1f}%</span>')
+    st.markdown(
+        '<div style="font-size:12px;color:#5F5E5A;margin:-4px 0 10px 2px">'
+        '🌎 美股(延遲約15分)　' + '　·　'.join(parts) + '</div>',
+        unsafe_allow_html=True)
+
+
 def _render_market_banner() -> bool:
     """畫大盤順逆風橫幅(全頁背景),回傳 is_headwind(逆風=True)。"""
     ctx = _market_ctx_cached()
@@ -502,6 +533,7 @@ def _market_banner_fragment() -> None:
     """只讓『大盤橫幅』這一塊每 30 秒自己重算重畫,其他區塊不跟著重跑
     (避免整頁刷新造成 lag)。順便把逆風狀態寫進 session_state 給買進煞車用。"""
     st.session_state["_mkt_headwind"] = _render_market_banner()
+    _render_us_line()
 
 
 def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
