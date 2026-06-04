@@ -55,21 +55,82 @@ def _index_bars() -> list[dict]:
     return []
 
 
+def _live_index_today(today_str: str) -> tuple[float | None, str]:
+    """盤中抓『今天』的即時加權指數。回 (指數, 日期) 或 (None, "")。
+    1) Fugle 即時報價 IX0001(跟你個股同源、不延遲)。
+    2) 退 yfinance ^TWII(延遲 ~15 分,但 history 最後一根盤中通常就是今天)。"""
+    # 1) Fugle 即時報價
+    try:
+        from fugle_agent.client import FugleClient
+        q = FugleClient().quote(_FUGLE_TAIEX)
+        if isinstance(q, dict) and not q.get("error"):
+            level = None
+            for k in ("lastPrice", "closePrice", "price", "last"):
+                v = q.get(k)
+                if isinstance(v, (int, float)) and v:
+                    level = float(v)
+                    break
+                if isinstance(v, str) and v.strip():
+                    try:
+                        level = float(v.replace(",", ""))
+                        break
+                    except ValueError:
+                        pass
+            if level is not None:
+                qd = str(q.get("date", ""))[:10]
+                return level, (qd or today_str)
+    except Exception:
+        pass
+    # 2) yfinance ^TWII 退路
+    try:
+        r = us_market.quote(_TWII)
+        if isinstance(r, dict) and not r.get("error"):
+            level = r.get("lastPrice")
+            qd = str(r.get("asOf", ""))[:10]
+            if isinstance(level, (int, float)) and qd and qd >= today_str:
+                return float(level), qd
+    except Exception:
+        pass
+    return None, ""
+
+
 def _twii_signals() -> dict | None:
-    """回 {close, ma10, change_pct, above_ma10, date} 或 None(抓不到)。"""
+    """回 {close, ma10, change_pct, above_ma10, date} 或 None(抓不到)。
+
+    盤中:今天的指數用即時報價(才不會卡在昨天的日K);10 日線與昨收用日K。
+    抓不到即時 → 退回最後一根日K(舊行為,至少誠實標昨天日期)。"""
     bars = _index_bars()
     if len(bars) < 2:
         return None
+    today_str = _now_tw().strftime("%Y-%m-%d")
     closes = [float(b["close"]) for b in bars]
-    last = closes[-1]
-    prev = closes[-2]
-    ma10 = sum(closes[-10:]) / min(len(closes), 10)
+    dates = [str(b.get("date", ""))[:10] for b in bars]
+
+    # 昨收 = 最後一根「日期 < 今天」的 bar(若日K還沒有今天,就是 closes[-1])
+    prev_close = None
+    for c, d in zip(reversed(closes), reversed(dates)):
+        if d and d < today_str:
+            prev_close = c
+            break
+    if prev_close is None:
+        prev_close = closes[-2]
+
+    # 10 日線基準:只用「已完成日」的收盤(排除今天那根,若日K已含今天)
+    completed = [c for c, d in zip(closes, dates) if d and d < today_str] or closes
+    ma10 = sum(completed[-10:]) / min(len(completed), 10)
+
+    # 今天的指數:先試即時;失敗才退回最後一根日K
+    last, date_used = _live_index_today(today_str)
+    if last is None or date_used < today_str or abs(last - prev_close) <= 1e-6:
+        last = closes[-1]
+        date_used = dates[-1]
+
     return {
         "close": last,
         "ma10": ma10,
-        "change_pct": (last / prev - 1) * 100 if prev else 0.0,
+        "change_pct": (last / prev_close - 1) * 100 if prev_close else 0.0,
         "above_ma10": last >= ma10,
-        "date": str(bars[-1].get("date", ""))[:10],
+        "date": date_used,
     }
 
 
