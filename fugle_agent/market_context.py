@@ -1,10 +1,10 @@
-# ⬆️【要上傳 2026-06-05 00:53】market_context.py — 大盤永遠講台股加權(拿掉盤前改講美股)
+# ⬆️【要上傳 2026-06-05 07:49】market_context.py — 大盤永遠講台股加權(拿掉盤前改講美股)
 """大盤順逆風 — 全頁共用背景,不分個股,不存 Sheet(當下算當下用)。
 
 時間邏輯:
-  盤前(台股還沒開,台北 09:00 前)→ 看昨晚美股(標普/那斯達克)+ 費半,給開盤氣氛。
-  開盤後(09:00 起)→ 只看加權指數自己(站上 10 日線 + 今天漲跌);
-                     美股退場(開盤價已消化隔夜美股,不重複算)。
+  大盤橫幅永遠講「台股加權指數」自己(站上 10 日線 + 漲跌),不分盤前盤後。
+  盤中 → 用即時加權指數 vs 昨收;沒開盤/收盤後 → 用最近一個交易日收盤 vs 前一日收盤
+  (才不會自己比自己變成 +0.0%)。美股是獨立的一條,不在這裡混進來。
 
 只影響「買」:逆風(is_headwind=True)時,買進類動作會被踩煞車;賣/停損不受影響。
 
@@ -156,25 +156,26 @@ def _twii_signals() -> dict | None:
     closes = [float(b["close"]) for b in bars]
     dates = [str(b.get("date", ""))[:10] for b in bars]
 
-    # 昨收 = 最後一根「日期 < 今天」的 bar(若日K還沒有今天,就是 closes[-1])
-    prev_close = None
-    for c, d in zip(reversed(closes), reversed(dates)):
-        if d and d < today_str:
-            prev_close = c
-            break
-    if prev_close is None:
-        prev_close = closes[-2]
+    # 先試「今天的即時指數」。判定真的有今天盤中價的條件:
+    #   有值、日期是今天、且跟最後一根日K收盤不同(相同多半是盤前回的昨收殘影)。
+    live, live_date, live_time = _live_index_today(today_str)
+    has_live = (live is not None and live_date >= today_str
+                and abs(live - closes[-1]) > 1e-6)
 
-    # 10 日線基準:只用「已完成日」的收盤(排除今天那根,若日K已含今天)
-    completed = [c for c, d in zip(closes, dates) if d and d < today_str] or closes
-    ma10 = sum(completed[-10:]) / min(len(completed), 10)
-
-    # 今天的指數:先試即時;失敗才退回最後一根日K
-    last, date_used, data_time = _live_index_today(today_str)
-    if last is None or date_used < today_str or abs(last - prev_close) <= 1e-6:
-        last = closes[-1]
-        date_used = dates[-1]
-        data_time = ""   # 退回日K → 沒有到秒的盤中時間,只剩日期
+    if has_live:
+        # 盤中:今天即時價 vs 昨收(最後一根「已完成日」),10 日線只用已完成日。
+        last, date_used, data_time = live, today_str, live_time
+        prev_close = next((c for c, d in zip(reversed(closes), reversed(dates))
+                           if d and d < today_str), closes[-1])
+        completed = [c for c, d in zip(closes, dates) if d and d < today_str] or closes
+        ma10 = sum(completed[-10:]) / min(len(completed), 10)
+    else:
+        # 沒開盤/收盤後:顯示「最近一個交易日」的真實漲跌 = 最後一根收盤 vs 前一根收盤。
+        # 日收盤沒有盤中秒級時間,就用那天的台股收盤時間 13:30:00 當資料時間(時分秒一致)。
+        last, date_used = closes[-1], dates[-1]
+        data_time = f"{dates[-1]} 13:30:00" if dates[-1] else ""
+        prev_close = closes[-2] if len(closes) >= 2 else closes[-1]
+        ma10 = sum(closes[-10:]) / min(len(closes), 10)
 
     return {
         "close": last,
