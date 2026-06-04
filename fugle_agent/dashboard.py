@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 00:40】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-05 07:54】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -560,10 +560,23 @@ def _market_banner_fragment() -> None:
 def _render_forecast_freshness() -> None:
     """三盞預測各自的「資料新鮮度」,一盞一行,排在大盤、美股下面。
     (三盞是即時算的,所以這裡標的是『它用的資料有多新』。)"""
+    # 時間戳全部沿用「已經抓好、有快取」的大盤 / 美股結果,不額外打網路。
+    ctx = _market_ctx_cached()
+    now_t = ctx.get("data_time") or ""                       # 大盤即時(盤中到秒;收盤後=當日13:30:00)
+    cd = ctx.get("completed_date") or ctx.get("data_date") or ""   # 最近完成交易日
+    daily_t = f"{cd} 13:30:00" if cd else ""
+    us = _us_market_cached()
+    us_t = us.get("time") or us.get("date") or ""            # 美股(延遲約15分,到分)
+
+    nh = f"即時 {now_t}" if now_t else "即時(到秒)"
+    tm = (f"今天 {now_t}　＋ 美股 {us_t}(延遲約15分)" if (now_t or us_t)
+          else "今天收盤 ＋ 隔夜美股(延遲約15分)")
+    td = (f"日線 {daily_t}　＋ 外資 {cd}(每日,收盤後統計)" if cd
+          else "日線昨收 ＋ 外資(每日)")
     rows = [
-        ("🔮", "下一小時", "即時(到秒)"),
-        ("🌤️", "明天", "今天收盤 ＋ 隔夜美股(延遲約15分)"),
-        ("📅", "三天後", "日線昨收 ＋ 外資(每日)"),
+        ("🔮", "下一小時", nh),
+        ("🌤️", "明天", tm),
+        ("📅", "三天後", td),
     ]
     html = ""
     for icon, name, fresh in rows:

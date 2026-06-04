@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 07:49】market_context.py — 大盤永遠講台股加權(拿掉盤前改講美股)
+# ⬆️【要上傳 2026-06-05 07:54】market_context.py — 大盤永遠講台股加權(拿掉盤前改講美股)
 """大盤順逆風 — 全頁共用背景,不分個股,不存 Sheet(當下算當下用)。
 
 時間邏輯:
@@ -165,8 +165,13 @@ def _twii_signals() -> dict | None:
     if has_live:
         # 盤中:今天即時價 vs 昨收(最後一根「已完成日」),10 日線只用已完成日。
         last, date_used, data_time = live, today_str, live_time
-        prev_close = next((c for c, d in zip(reversed(closes), reversed(dates))
-                           if d and d < today_str), closes[-1])
+        prev_close, completed_date = None, ""
+        for c, d in zip(reversed(closes), reversed(dates)):
+            if d and d < today_str:
+                prev_close, completed_date = c, d
+                break
+        if prev_close is None:
+            prev_close, completed_date = closes[-1], dates[-1]
         completed = [c for c, d in zip(closes, dates) if d and d < today_str] or closes
         ma10 = sum(completed[-10:]) / min(len(completed), 10)
     else:
@@ -175,6 +180,7 @@ def _twii_signals() -> dict | None:
         last, date_used = closes[-1], dates[-1]
         data_time = f"{dates[-1]} 13:30:00" if dates[-1] else ""
         prev_close = closes[-2] if len(closes) >= 2 else closes[-1]
+        completed_date = dates[-1]
         ma10 = sum(closes[-10:]) / min(len(closes), 10)
 
     return {
@@ -184,6 +190,7 @@ def _twii_signals() -> dict | None:
         "change_pct": (last / prev_close - 1) * 100 if prev_close else 0.0,
         "above_ma10": last >= ma10,
         "date": date_used,
+        "completed_date": completed_date,   # 最近一個「已完成交易日」(給三天後的日線/外資標時間用)
     }
 
 
@@ -223,4 +230,5 @@ def get_market_context() -> dict:
         reason = f"加權在均線附近、{chg:+.1f}%,方向不明 {dtag}"
     return {"light": light, "phase": "大盤", "is_headwind": head,
             "reason": reason, "updated": updated,
-            "data_time": s.get("data_time", ""), "data_date": s.get("date", "")}
+            "data_time": s.get("data_time", ""), "data_date": s.get("date", ""),
+            "completed_date": s.get("completed_date", "")}
