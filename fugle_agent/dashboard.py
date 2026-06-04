@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-04 21:56】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-04 22:20】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -554,6 +554,25 @@ def _market_banner_fragment() -> None:
     (避免整頁刷新造成 lag)。順便把逆風狀態寫進 session_state 給買進煞車用。"""
     st.session_state["_mkt_headwind"] = _render_market_banner()
     _render_us_line()
+    _render_forecast_freshness()
+
+
+def _render_forecast_freshness() -> None:
+    """三盞預測各自的「資料新鮮度」,一盞一行,排在大盤、美股下面。
+    (三盞是即時算的,所以這裡標的是『它用的資料有多新』。)"""
+    rows = [
+        ("🔮", "下一小時", "即時(到秒)"),
+        ("🌤️", "明天", "今天收盤 ＋ 隔夜美股(延遲約15分)"),
+        ("📅", "三天後", "日線昨收 ＋ 外資(每日)"),
+    ]
+    html = ""
+    for icon, name, fresh in rows:
+        html += (
+            '<div style="background:rgba(127,127,127,.07);border:0.5px solid '
+            'rgba(127,127,127,.25);border-radius:10px;padding:6px 12px;margin-bottom:8px;'
+            'font-size:13px">'
+            f'{icon} <b>{name}</b>　<span style="color:#5F5E5A">{fresh}</span></div>')
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
@@ -705,8 +724,16 @@ def _last_update_caption(rows: list[dict], mode: str = "持有") -> None:
     # 這裡只顯示「公司簡介/估值/新聞」那批 AI 資料是哪天刷的。
     fund = max((_g(r, "公司更新時間", "基本面資料時間") for r in rows), default="")
     ft, fs = _rel_time(fund, 60 * 24 * 5)
-    warn = "　⚠️ 有點舊,可跑深度分析刷新" if fs else ""
-    st.caption(f"三盞預測即時算　·　公司資料 {ft}{warn}")
+    warn = "　⚠️可跑深度分析刷新" if fs else ""
+    # 跟大盤、美股一樣做成一條橫幅排在上面:公司資料的更新時間。
+    # (三盞預測是「打開頁面即時算」,本身沒有「幾分前」,所以不列時間。)
+    st.markdown(
+        '<div style="background:rgba(127,127,127,.07);border:0.5px solid rgba(127,127,127,.25);'
+        'border-radius:10px;padding:8px 12px;margin-bottom:10px;font-size:13px">'
+        f'🏢 <b>公司資料：</b>{ft}{warn}　'
+        '<span style="color:#5F5E5A;font-size:12px">'
+        '(估值/配息/營收/新聞/簡介,每週日自動刷;三盞預測為即時算)</span></div>',
+        unsafe_allow_html=True)
     # 按鈕進度(每一頁各自獨立,跑完/重整都不丟)
     _render_tab_status(mode)
 
