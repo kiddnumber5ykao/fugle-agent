@@ -1,4 +1,4 @@
-# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1】tools.py — 公司面免費資料+走勢敏感+公司簡介
+# ⬆️【要上傳 2026-06-04 19:24】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -3140,12 +3140,20 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
 
         # data_date 用「免費資料的真實來源日期」(證交所那天),比 Haiku 自報的可靠。
         # institutional(法人籌碼)已改由官方外資「大戶燈」單獨處理,這裡固定資料不足/0。
+        # 上櫃股目前沒有免費官方月營收 → 把「資料不足」換成誠實的「上櫃,營收待補」。
+        _revenue = str(data.get("revenue", "資料不足"))
+        if "資料不足" in _revenue:
+            try:
+                if free_fetch.get_market(sym) == "上櫃":
+                    _revenue = "上櫃,營收待補"
+            except Exception:
+                pass
         return _store_and_return({
             "ok":                  True,
             "about":               str(data.get("about", "")).strip(),
             "estimate":            str(data.get("estimate", "資料不足")),
             "dividend":            str(data.get("dividend", "資料不足")),
-            "revenue":             str(data.get("revenue", "資料不足")),
+            "revenue":             _revenue,
             "institutional":       "資料不足",
             "news":                str(data.get("news", "資料不足")),
             "data_date":           (free_data_date or str(data.get("data_date", "")).strip())[:10],

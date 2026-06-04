@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-04 19:14】free_fetch.py — 免費官方資料 + 上櫃(櫃買)估值
+# ⬆️【要上傳 2026-06-04 19:24】free_fetch.py — 免費官方資料 + 上櫃估值 + 市場別標記
 """免費官方資料抓取 — 估值 / 月營收 / 新聞,給 _fetch_fundamentals 用。
 
 目的:把最貴的 Anthropic `web_search` 拿掉。改成:
@@ -115,6 +115,7 @@ def _build_valuation_cache() -> dict[str, dict]:
                 "yield": _to_float(row[i_yld]) if i_yld is not None and i_yld < len(row) else None,
                 "pbr": _to_float(row[i_pbr]) if i_pbr is not None and i_pbr < len(row) else None,
                 "data_date": data_date,
+                "market": "上市",
             }
         if out:
             break
@@ -158,6 +159,7 @@ def _build_tpex_valuation() -> dict[str, dict]:
             "pbr":   _to_float(_pick(d, "股價淨值比") or _pick(d, "淨值比")
                                or _pick(d, "PriceBookRatio") or _pick(d, "PBR")),
             "data_date": _roc_date_to_iso(_pick(d, "日期") or _pick(d, "Date")) or today,
+            "market": "上櫃",
         }
     return out
 
@@ -178,7 +180,13 @@ def get_valuation(sym: str) -> dict:
             pass
         _valuation_cache = cache
     return _valuation_cache.get(_clean_sym(sym),
-                                {"per": None, "yield": None, "pbr": None, "data_date": ""})
+                                {"per": None, "yield": None, "pbr": None,
+                                 "data_date": "", "market": ""})
+
+
+def get_market(sym: str) -> str:
+    """從官方估值清單判斷 上市/上櫃(5289 在櫃買清單 → 上櫃)。查不到回 ""。"""
+    return get_valuation(sym).get("market", "") or ""
 
 
 # ===========================================================================
