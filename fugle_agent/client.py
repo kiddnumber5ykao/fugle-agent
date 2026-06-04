@@ -66,6 +66,21 @@ class FugleClient:
         self._throttle()
         return self._client.stock.intraday.trades(symbol=symbol, limit=limit)
 
+    def intraday_candles(self, symbol: str, *, timeframe: str = "1") -> dict:
+        """盤中分鐘 K(給「此刻燈」用)。timeframe='1' 是 1 分鐘。
+        不同 Fugle SDK 版本介面略有出入,且免費方案不一定開放 → 全 try,
+        失敗回 {} 讓上層自動退回用逐筆(ticks)或報價(quote)。"""
+        self._throttle()
+        try:
+            return self._client.stock.intraday.candles(symbol=symbol, timeframe=timeframe)
+        except TypeError:
+            try:
+                return self._client.stock.intraday.candles(symbol=symbol)
+            except Exception:
+                return {}
+        except Exception:
+            return {}
+
     def movers(self, *, market: str = "TSE", direction: str = "up") -> dict:
         self._throttle()
         return self._client.stock.snapshot.movers(market=market, direction=direction)

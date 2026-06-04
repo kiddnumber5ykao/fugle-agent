@@ -385,6 +385,41 @@ def _cached_watchlist() -> list:
     return sheets.load_watchlist()
 
 
+@st.cache_data(ttl=15, show_spinner=False)
+def _prefetch_live_lights(symbols: tuple[str, ...]) -> dict:
+    """一次把『此刻燈 / 今天燈』所需的即時資料抓好(並行 + 快取 15 秒)。
+    回 {sym: {"now": {...}, "today": {...}}}。任何失敗都吞掉、回 ⚪ 資料不足,
+    絕不讓整頁壞掉。快取 15 秒 → 你一打開/互動就是即時,又不會每次重畫都猛打 Fugle。"""
+    from concurrent.futures import ThreadPoolExecutor
+    from fugle_agent import intraday_lights as il
+
+    def _one(sym: str) -> tuple[str, dict]:
+        try:
+            from fugle_agent.client import FugleClient
+            c = FugleClient()                 # 每個工作緒自己一個 client → 真並行
+            quote = c.quote(sym)
+            series = il.series_from_candles(c.intraday_candles(sym))
+            if len(series) < 2:               # 分鐘K拿不到 → 退逐筆
+                series = il.series_from_ticks(c.intraday_ticks(sym, limit=120))
+            return sym, {"now": il.now_light(series, quote),
+                         "today": il.today_light(quote)}
+        except Exception:
+            return sym, {"now": {"light": "⚪ 資料不足", "reason": ""},
+                         "today": {"light": "⚪ 資料不足", "reason": ""}}
+
+    out: dict[str, dict] = {}
+    syms = [s for s in symbols if s]
+    if not syms:
+        return out
+    try:
+        with ThreadPoolExecutor(max_workers=min(6, len(syms))) as pool:
+            for sym, res in pool.map(_one, syms):
+                out[sym] = res
+    except Exception:
+        pass
+    return out
+
+
 @st.cache_data(ttl=25, show_spinner=False)
 def _market_ctx_cached() -> dict:
     """大盤順逆風。快取 25 秒(< 橫幅自動刷新的 30 秒),
@@ -650,6 +685,13 @@ def _render_stock_list(rows: list[dict], card_fn, act_top: bool = True) -> None:
     """act_top=True(持股):要動手的排最上面直接展,其餘收合分組。
     act_top=False(追蹤):全部依動作收成一組組,點開才看(連可以買也收起來)。"""
     rows.sort(key=lambda r: _plain_order_key(_g(r, "我該做啥", "綜合建議")))
+    # 一次把這一頁所有股票的「此刻燈 / 今天燈」即時資料並行抓好(快取 15 秒),
+    # 卡片只讀結果、不各自打網路 → 即時又不卡頁。
+    _syms = tuple(s for s in (_g(r, "代號") or _g(r, "symbol") for r in rows) if s)
+    try:
+        st.session_state["_live_lights"] = _prefetch_live_lights(_syms)
+    except Exception:
+        st.session_state["_live_lights"] = {}
     if act_top:
         act = [r for r in rows if _plain_action(_g(r, "我該做啥", "綜合建議"))[2]]
         rest = [r for r in rows if not _plain_action(_g(r, "我該做啥", "綜合建議"))[2]]
@@ -784,8 +826,9 @@ def _detail_common(r: dict, adv: str) -> None:
     _rl = _risk_line(r, bool(pnl_pct))
     if _rl:
         st.markdown(_rl, unsafe_allow_html=True)
-    # 2) 最近走勢(白話)+ 相對強度 + 卡住天數
-    short = _g(r, "短線燈號")
+    # 2) 三盞燈(最即時 → 最穩):⚡此刻 → 📊今天 → 📈這陣子
+    #    此刻 / 今天 是「打開頁面當下」即時算的(來自並行預抓);這陣子是每日趨勢(來自 Sheet)。
+    short = _g(r, "短線燈號")           # 這陣子燈(每日趨勢,_momentum_light)
     mom = _g(r, "動能原因")
     rs = _g(r, "相對強度")
     stuck = _g(r, "卡住天數")
@@ -799,9 +842,26 @@ def _detail_common(r: dict, adv: str) -> None:
     except (ValueError, TypeError):
         pass
     extra_txt = ("　" + "・".join(extra)) if extra else ""
-    st.markdown(f'<div style="margin-top:8px">📈 <b>最近走勢</b>　{short}{extra_txt}'
-                + (f'<br><span style="{mut};font-size:13px">{mom}</span>' if mom else "")
-                + '</div>', unsafe_allow_html=True)
+
+    _sym = _g(r, "代號") or _g(r, "symbol")
+    _ll = (st.session_state.get("_live_lights") or {}).get(_sym, {})
+    _now = _ll.get("now") or {}
+    _today = _ll.get("today") or {}
+
+    def _light_line(icon: str, name: str, light: str, why: str) -> str:
+        if not light:
+            return ""
+        return (f'<div style="margin-top:6px">{icon} <b>{name}</b>　{light}'
+                + (f'<br><span style="{mut};font-size:13px">{why}</span>' if why else "")
+                + '</div>')
+
+    st.markdown(
+        _light_line("⚡", "此刻", _now.get("light", ""), _now.get("reason", ""))
+        + _light_line("📊", "今天", _today.get("light", ""), _today.get("reason", ""))
+        + f'<div style="margin-top:6px">📈 <b>這陣子</b>　{short}{extra_txt}'
+        + (f'<br><span style="{mut};font-size:13px">{mom}</span>' if mom else "")
+        + '</div>',
+        unsafe_allow_html=True)
     # 3) 基本面 — 拆成「公司面」+「籌碼面」兩塊,各自一個燈 + 白話原因
     ft, fs = _rel_time(_g(r, "基本面資料時間"), 60 * 24 * 5)
 
