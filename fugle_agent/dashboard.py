@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-03 23:50  資料時間後面加失敗檔數;分頁獨立狀態(未含快取)
+# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1】dashboard.py — 卡片改三盞預測+怎麼辦+關於這檔
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -420,6 +420,49 @@ def _prefetch_live_lights(symbols: tuple[str, ...]) -> dict:
     return out
 
 
+@st.cache_data(ttl=15, show_spinner=False)
+def _prefetch_forecasts(items: tuple, is_holding: bool) -> dict:
+    """一整頁的三盞預測 + 怎麼辦 + 現價/損益,即時並行算好(快取 15 秒)。
+    items = ((代號, 股數, 總成本), ...)。任何失敗都回空 dict,不讓整頁壞。"""
+    try:
+        from fugle_agent import live_forecast
+        return live_forecast.prefetch(list(items), is_holding=is_holding)
+    except Exception:
+        return {}
+
+
+def _fc_get(r: dict) -> dict:
+    sym = _g(r, "代號") or _g(r, "symbol")
+    return (st.session_state.get("_forecasts") or {}).get(sym, {})
+
+
+def _fc_group(action: str) -> tuple[int, str]:
+    """依「怎麼辦」開頭的燈色分組(要注意的排最前)。"""
+    a = (action or "").strip()
+    if not a:
+        return (3, "⚪ 資料不足")
+    c = a[0]
+    if c == "🔴":
+        return (0, "🔴 要注意的")
+    if c == "🟢":
+        return (1, "🟢 可以動作的")
+    if c == "🟡":
+        return (2, "🟡 再等等的")
+    return (3, "⚪ 資料不足")
+
+
+def _fc_label(action: str) -> tuple[str, str]:
+    """把「怎麼辦」拆成 (燈色 icon, 短標題),給卡片標題用。"""
+    a = (action or "").split("　")[0].strip()   # 去掉大盤逆風那段
+    if not a:
+        return ("⚪", "資料不足")
+    c = a[0]
+    if c in "🟢🟡🔴⚪":
+        short = a[1:].split("、")[0].split("（")[0].split("(")[0].strip()
+        return (c, short or "—")
+    return ("⚪", a.split("、")[0][:8])
+
+
 @st.cache_data(ttl=25, show_spinner=False)
 def _market_ctx_cached() -> dict:
     """大盤順逆風。快取 25 秒(< 橫幅自動刷新的 30 秒),
@@ -615,22 +658,12 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
 
 
 def _last_update_caption(rows: list[dict], mode: str = "持有") -> None:
-    # 顯示「資料時間」(資料本身是哪天的),不是「整理時間」(我幾點跑分析)
-    tech = max((_g(r, "技術資料時間") for r in rows), default="")
-    fund = max((_g(r, "基本面資料時間") for r in rows), default="")
-    tt, ts = _rel_time(tech, 60 * 24 * 2)      # 技術資料 > 2 天才提醒
-    ft, fs = _rel_time(fund, 60 * 24 * 5)       # 基本面資料 > 5 天才提醒
-    warn = ""
-    if ts:
-        warn += "　⚠️ 技術資料有點舊"
-    # 數一下「沒更新成功」的檔數:時間欄寫(失敗) 或 燈號是⚪資料不足
-    def _bad(r, tcol, lcol):
-        return ("失敗" in _g(r, tcol)) or ("資料不足" in _g(r, lcol))
-    n_bad_t = sum(1 for r in rows if _bad(r, "技術資料時間", "短線燈號"))
-    n_bad_f = sum(1 for r in rows if _bad(r, "基本面資料時間", "公司面燈號"))
-    bt = f"(❌{n_bad_t} 檔失敗)" if n_bad_t else ""
-    bf = f"(❌{n_bad_f} 檔失敗)" if n_bad_f else ""
-    st.caption(f"資料時間 — 技術 {tt}{bt} · 基本面 {ft}{bf}{warn}")
+    # 三盞預測是「打開頁面當下即時算」的 → 沒有「技術資料時間」可顯示;
+    # 這裡只顯示「公司簡介/估值/新聞」那批 AI 資料是哪天刷的。
+    fund = max((_g(r, "公司更新時間", "基本面資料時間") for r in rows), default="")
+    ft, fs = _rel_time(fund, 60 * 24 * 5)
+    warn = "　⚠️ 有點舊,可跑深度分析刷新" if fs else ""
+    st.caption(f"三盞預測即時算　·　公司資料 {ft}{warn}")
     # 更新狀態:每一頁(持有/追蹤)各自獨立,只顯示「這一頁」的狀態
     _stat = st.session_state.get(f"_last_status_{mode}")
     if _stat:
@@ -649,7 +682,7 @@ def _render_holdings() -> None:
         st.info("還沒有持股 — 在「股票交易」加交易,再到 ⚙️ 按「我剛買賣股票」。")
         return
     _last_update_caption(rows, "持有")
-    _render_stock_list(rows, _holding_card, act_top=False)
+    _render_stock_list(rows, _holding_card, act_top=False, is_holding=True)
 
 
 def _render_watchlist() -> None:
@@ -663,7 +696,7 @@ def _render_watchlist() -> None:
         st.info("還沒有追蹤 — 在「追蹤清單」加代號,再到 ⚙️ 按「我剛加追蹤」。")
         return
     _last_update_caption(rows, "追蹤")
-    _render_stock_list(rows, _watch_card, act_top=False)
+    _render_stock_list(rows, _watch_card, act_top=False, is_holding=False)
 
 
 def _render_totals() -> None:
@@ -673,7 +706,15 @@ def _render_totals() -> None:
     except Exception:
         rows = []
     cost = sum(_num(_g(r, "總成本")) or 0 for r in rows)
-    pnl = sum(_num(_g(r, "損益")) or 0 for r in rows)
+    # 損益改即時算(不存 Sheet):用同一份快取的預測結果加總
+    items = tuple(
+        (str(_g(r, "代號") or _g(r, "symbol")),
+         int(_num(_g(r, "股數")) or 0),
+         float(_num(_g(r, "總成本")) or 0.0))
+        for r in rows if (_g(r, "代號") or _g(r, "symbol"))
+    )
+    fcs = _prefetch_forecasts(items, True)
+    pnl = sum((v.get("pnl") or {}).get("損益", 0) or 0 for v in fcs.values())
     realized = _realized_total()
     m1, m2, m3 = st.columns(3)
     m1.metric("總成本", f"{cost:,.0f}")
@@ -681,43 +722,34 @@ def _render_totals() -> None:
     m3.metric("已實現損益(賣掉的)", f"{realized:+,.0f}")
 
 
-def _render_stock_list(rows: list[dict], card_fn, act_top: bool = True) -> None:
-    """act_top=True(持股):要動手的排最上面直接展,其餘收合分組。
-    act_top=False(追蹤):全部依動作收成一組組,點開才看(連可以買也收起來)。"""
-    rows.sort(key=lambda r: _plain_order_key(_g(r, "我該做啥", "綜合建議")))
-    # 一次把這一頁所有股票的「此刻燈 / 今天燈」即時資料並行抓好(快取 15 秒),
-    # 卡片只讀結果、不各自打網路 → 即時又不卡頁。
-    _syms = tuple(s for s in (_g(r, "代號") or _g(r, "symbol") for r in rows) if s)
+def _render_stock_list(rows: list[dict], card_fn, act_top: bool = True,
+                       is_holding: bool = True) -> None:
+    """即時算好整頁的三盞預測 + 怎麼辦,依「怎麼辦」的燈色分組(要注意的排最前)。"""
+    # 一次並行算好整頁(快取 15 秒);卡片只讀結果、不各自打網路。
+    items = tuple(
+        (str(_g(r, "代號") or _g(r, "symbol")),
+         int(_num(_g(r, "股數")) or 0),
+         float(_num(_g(r, "總成本")) or 0.0))
+        for r in rows if (_g(r, "代號") or _g(r, "symbol"))
+    )
     try:
-        st.session_state["_live_lights"] = _prefetch_live_lights(_syms)
+        st.session_state["_forecasts"] = _prefetch_forecasts(items, is_holding)
     except Exception:
-        st.session_state["_live_lights"] = {}
-    if act_top:
-        act = [r for r in rows if _plain_action(_g(r, "我該做啥", "綜合建議"))[2]]
-        rest = [r for r in rows if not _plain_action(_g(r, "我該做啥", "綜合建議"))[2]]
-        st.markdown('<div class="gyh-card">', unsafe_allow_html=True)
-        if act:
-            for r in act:
-                card_fn(r)
-        else:
-            st.success("今天沒什麼要動手的,放著就好 😌")
-        st.markdown('</div>', unsafe_allow_html=True)
-    else:
-        rest = rows
+        st.session_state["_forecasts"] = {}
 
-    # 其他依動作詞分組,各自收合(平常不展開)
+    def _act(r: dict) -> str:
+        return _fc_get(r).get("action") or _g(r, "我該做啥", "綜合建議") or ""
+
+    rows = sorted(rows, key=lambda r: _fc_group(_act(r))[0])
     order, groups = [], {}
-    for r in rest:
-        lab = _plain_action(_g(r, "我該做啥", "綜合建議"))[1]
+    for r in rows:
+        lab = _fc_group(_act(r))[1]
         if lab not in groups:
             groups[lab] = []
             order.append(lab)
-    for r in rest:
-        groups[_plain_action(_g(r, "我該做啥", "綜合建議"))[1]].append(r)
+        groups[lab].append(r)
     for lab in order:
-        icon = _plain_action(_g(groups[lab][0], "我該做啥", "綜合建議"))[0]
-        title = _GROUP_TITLE.get(lab, f"{lab}的")
-        with st.expander(f"{icon} {title}（{len(groups[lab])} 檔）"):
+        with st.expander(f"{lab}（{len(groups[lab])} 檔）", expanded=lab.startswith("🔴")):
             st.markdown('<div class="gyh-card">', unsafe_allow_html=True)
             for r in groups[lab]:
                 card_fn(r)
@@ -727,49 +759,28 @@ def _render_stock_list(rows: list[dict], card_fn, act_top: bool = True) -> None:
 def _holding_card(r: dict) -> None:
     code = _g(r, "代號", "symbol")
     name = _g(r, "名稱", "name")
-    adv = _g(r, "我該做啥", "綜合建議")
-    icon, label_w, _ = _plain_action(adv)
-    pnl_pct = _num(_g(r, "損益%"))
-    pct_txt = f"　{'賺' if pnl_pct >= 0 else '賠'} {abs(pnl_pct):.1f}%" if pnl_pct is not None else ""
+    fc = _fc_get(r)
+    action = fc.get("action") or _g(r, "我該做啥", "綜合建議")
+    icon, label_w = _fc_label(action)
+    pnl = fc.get("pnl") or {}
+    pct = pnl.get("損益%")
+    pct_txt = f"　{'賺' if pct >= 0 else '賠'} {abs(pct):.1f}%" if pct is not None else ""
     label = f"{icon} {label_w}　{code} {name}{pct_txt}"
     with st.expander(label):
-        _detail_common(r, adv)
-        # 目標賣價
-        cur = _num(_g(r, "現價"))
-        targets = [("回本", _num(_g(r, "回本價"))),
-                   ("+5%", _num(_g(r, "淨賺5%價"))),
-                   ("+10%", _num(_g(r, "淨賺10%價"))),
-                   ("+15%", _num(_g(r, "淨賺15%價"))),
-                   ("+20%", _num(_g(r, "淨賺20%價")))]
-        nearest = None
-        if cur is not None:
-            cand = [(abs(p - cur), i) for i, (_, p) in enumerate(targets) if p is not None]
-            if cand:
-                nearest = min(cand)[1]
-        cells = ""
-        for i, (lab, p) in enumerate(targets):
-            if p is None:
-                continue
-            style = ("outline:2px solid #378ADD;background:#E6F1FB;" if i == nearest else "")
-            cells += (f'<div style="flex:1;text-align:center;padding:6px 2px;border:0.5px solid '
-                      f'rgba(127,127,127,.2);border-radius:8px;font-size:12px;{style}">'
-                      f'<div style="color:#5F5E5A;font-size:11px">{lab}</div>{p:g}</div>')
-        if cells:
-            st.markdown('<div style="margin-top:6px"><b style="font-size:13px">目標賣價</b>'
-                        f'（最近現價的框起來)</div><div style="display:flex;gap:4px;margin-top:4px">{cells}</div>',
-                        unsafe_allow_html=True)
+        _detail_common(r, action)
 
 
 def _watch_card(r: dict) -> None:
     code = _g(r, "代號", "symbol")
     name = _g(r, "名稱", "name")
     reason = _g(r, "追蹤理由")
-    adv = _g(r, "我該做啥", "綜合建議")
-    icon, label_w, _ = _plain_action(adv)
+    fc = _fc_get(r)
+    action = fc.get("action") or _g(r, "我該做啥", "綜合建議")
+    icon, label_w = _fc_label(action)
     tag = f"（{reason}）" if reason else ""
     label = f"{icon} {label_w}　{code} {name}{tag}"
     with st.expander(label):
-        _detail_common(r, adv)
+        _detail_common(r, action)
 
 
 def _fnum(v):
@@ -806,98 +817,67 @@ def _risk_line(r: dict, is_holding: bool) -> str:
             f'<br><span style="{mut};font-size:13px">{body}</span></div>')
 
 
-def _detail_common(r: dict, adv: str) -> None:
-    """順序:損益 → 動能(+白話原因) → 基本面(+白話原因) → 我該做啥(最後)。"""
+def _detail_common(r: dict, action: str) -> None:
+    """卡片內容(全部即時算):現價/損益 → 三盞預測 → 怎麼辦 → 關於這檔。"""
     mut = "color:#5F5E5A"
-    # 1) 賺賠(持有才有)
-    pnl_pct = _g(r, "損益%")
-    if pnl_pct:
-        pnl = _g(r, "損益")
-        word = ""
-        try:
-            v = float(pnl_pct)
+    fc = _fc_get(r)
+
+    # 1) 現價 / 損益(即時,不存 Sheet)
+    price = fc.get("price")
+    pnl = fc.get("pnl") or {}
+    dt = fc.get("data_time")
+    if price is not None:
+        line = f'💲 <b>現價</b>　{price:g}'
+        if pnl.get("損益%") is not None:
+            v = pnl["損益%"]
             col = "var(--color-text-success)" if v >= 0 else "var(--color-text-danger)"
-            word = "賺 " if v >= 0 else "賠 "
-        except ValueError:
-            col = "inherit"
-        st.markdown(f'💰 <b>賺賠</b>　<span style="color:{col};font-weight:500">{word}{pnl_pct}%'
-                    f'{("  " + pnl) if pnl else ""}</span>', unsafe_allow_html=True)
-    # 1b) 停損 / 賺賠比(持股)或 進場參考(追蹤)
-    _rl = _risk_line(r, bool(pnl_pct))
-    if _rl:
-        st.markdown(_rl, unsafe_allow_html=True)
-    # 2) 三盞燈(最即時 → 最穩):⚡此刻 → 📊今天 → 📈這陣子
-    #    此刻 / 今天 是「打開頁面當下」即時算的(來自並行預抓);這陣子是每日趨勢(來自 Sheet)。
-    short = _g(r, "短線燈號")           # 這陣子燈(每日趨勢,_momentum_light)
-    mom = _g(r, "動能原因")
-    rs = _g(r, "相對強度")
-    stuck = _g(r, "卡住天數")
-    extra = []
-    if rs:
-        extra.append(rs)
-    try:
-        sd = int(float(stuck))
-        if sd >= 1:
-            extra.append(f"卡 {sd} 天" + ("、卡太久可考慮換股" if sd >= 3 else ""))
-    except (ValueError, TypeError):
-        pass
-    extra_txt = ("　" + "・".join(extra)) if extra else ""
+            line += (f'　<span style="color:{col};font-weight:500">'
+                     f'{"賺" if v >= 0 else "賠"} {abs(v):.1f}%　{pnl.get("損益", 0):+,.0f}</span>')
+        st.markdown(line + (f'<br><span style="{mut};font-size:12px">資料時間 {dt}</span>'
+                            if dt else ""), unsafe_allow_html=True)
 
-    _sym = _g(r, "代號") or _g(r, "symbol")
-    _ll = (st.session_state.get("_live_lights") or {}).get(_sym, {})
-    _now = _ll.get("now") or {}
-    _today = _ll.get("today") or {}
-
-    def _light_line(icon: str, name: str, light: str, why: str) -> str:
-        if not light:
+    # 2) 三盞預測:⚡下一小時 → 📊明天 → 📅三天後
+    def _fline(icon: str, name: str, f: dict) -> str:
+        lean = f.get("lean", "")
+        if not lean:
             return ""
-        return (f'<div style="margin-top:6px">{icon} <b>{name}</b>　{light}'
-                + (f'<br><span style="{mut};font-size:13px">{why}</span>' if why else "")
+        conf = f.get("conf", "")
+        reason = f.get("reason", "")
+        conf_txt = f'　<span style="{mut};font-size:12px">信心{conf}</span>' if conf else ""
+        return (f'<div style="margin-top:7px">{icon} <b>{name}</b>　{lean}{conf_txt}'
+                + (f'<br><span style="{mut};font-size:13px">{reason}</span>' if reason else "")
                 + '</div>')
 
     st.markdown(
-        _light_line("⚡", "此刻", _now.get("light", ""), _now.get("reason", ""))
-        + _light_line("📊", "今天", _today.get("light", ""), _today.get("reason", ""))
-        + f'<div style="margin-top:6px">📈 <b>這陣子</b>　{short}{extra_txt}'
-        + (f'<br><span style="{mut};font-size:13px">{mom}</span>' if mom else "")
-        + '</div>',
+        _fline("⚡", "下一小時", fc.get("next_hour", {}))
+        + _fline("📊", "明天", fc.get("tomorrow", {}))
+        + _fline("📅", "三天後", fc.get("three_day", {})),
         unsafe_allow_html=True)
-    # 3) 基本面 — 拆成「公司面」+「籌碼面」兩塊,各自一個燈 + 白話原因
-    ft, fs = _rel_time(_g(r, "基本面資料時間"), 60 * 24 * 5)
 
-    def _fund_block(icon: str, title: str, light: str, items: list[tuple[str, str]]) -> None:
-        lines = [(k, _g(r, k)) for k in items]
-        lines = [(k, v) for k, v in lines if v]
-        body = "".join(f'<div style="display:flex;justify-content:space-between;font-size:13px;'
-                       f'padding:2px 0"><span style="{mut}">{k}</span><span>{v}</span></div>'
-                       for k, v in lines)
-        st.markdown(f'<div style="margin-top:10px">{icon} <b>{title}</b> '
-                    f'{_fund_light_label(light)}</div>' + body, unsafe_allow_html=True)
+    # 3) 怎麼辦(用三盞預測算好的,已含大盤逆風提醒)
+    act = action or fc.get("action") or ""
+    if act:
+        st.markdown('<div style="margin-top:10px;border-top:0.5px solid rgba(127,127,127,.2);'
+                    f'padding-top:8px">👉 <b>怎麼辦</b>　{act}</div>', unsafe_allow_html=True)
 
-    _fund_block("🏢", "這家公司", _g(r, "公司面燈號"),
-                ["估值", "配息", "營收動能"])
-    _fund_block("🐳", "大戶(法人)", _g(r, "籌碼面燈號"),
-                ["法人籌碼", "近期新聞重點"])
-    st.caption(f"公司資料 {ft}{' ⚠️舊' if fs else ''}")
-    # 4) 怎麼辦(最後)
-    reason = _action_reason(adv)
-    # 大盤逆風只擋「買」:買進類動作加一句提醒(賣/抱不受影響)
-    _buy_labels = ("可以買", "先買一點", "還能再買一點")
-    _headwind_note = ""
-    if (st.session_state.get("_mkt_headwind")
-            and _plain_action(adv)[1] in _buy_labels):
-        _headwind_note = ('<br><span style="color:#A32D2D;font-size:13px">'
-                          '🌡️ 大盤逆風,想買的話等大盤穩一點再進</span>')
-    st.markdown('<div style="margin-top:10px;border-top:0.5px solid rgba(127,127,127,.2);'
-                'padding-top:8px">👉 <b>怎麼辦</b>　'
-                + _pill(_plain_action(adv)[1], _pill_kind(adv))
-                + (f'<br><span style="{mut};font-size:13px">{reason}</span>' if reason else "")
-                + _headwind_note
-                + '</div>', unsafe_allow_html=True)
-    # 本次花費
-    cost = _g(r, "本次花費")
-    if cost:
-        st.caption(f"💰 本檔基本面花費 {cost}(估)")
+    # 4) 關於這檔(備註區):公司在幹嘛 + 新聞 + 估值/配息/營收
+    about = _g(r, "公司簡介")
+    items = [
+        ("公司", about),
+        ("新聞", _g(r, "新聞", "近期新聞重點")),
+        ("估值", _g(r, "估值")),
+        ("配息", _g(r, "配息")),
+        ("營收", _g(r, "營收動能")),
+    ]
+    body = "".join(
+        f'<div style="display:flex;gap:8px;font-size:13px;padding:2px 0">'
+        f'<span style="{mut};min-width:34px">{k}</span><span>{v}</span></div>'
+        for k, v in items if v)
+    if body:
+        st.markdown('<div style="margin-top:12px">📋 <b>關於這檔</b></div>' + body,
+                    unsafe_allow_html=True)
+        ft, fs = _rel_time(_g(r, "公司更新時間", "基本面資料時間"), 60 * 24 * 5)
+        st.caption(f"公司資料 {ft}{' ⚠️舊' if fs else ''}")
 
 
 def _realized_total() -> float:

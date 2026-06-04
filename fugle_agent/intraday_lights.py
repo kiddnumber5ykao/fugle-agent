@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 新增於 2026-06-04  三盞即時燈:此刻燈 / 今天燈(這陣子燈仍在 tools.py)
+# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1】intraday_lights.py — 盤中微結構 helper
 """盤中即時燈號 — 純計算核心。
 
 三盞燈的分工(從最即時 → 最穩):
@@ -205,6 +205,88 @@ def series_from_ticks(ticks: dict | None) -> list[tuple[float, float]]:
             out.append((t, price))
     out.sort(key=lambda x: x[0])
     return out
+
+
+def vwap_pct_from_candles(candles: dict | None, last_price: float | None) -> Optional[float]:
+    """用盤中分鐘K算 VWAP(成交量加權均價),回「現價 vs VWAP 的%」。
+    站上 VWAP → 正、跌破 → 負。算不出回 None。"""
+    rows = (candles or {}).get("data") if isinstance(candles, dict) else None
+    if not rows or last_price is None:
+        return None
+    num = 0.0
+    den = 0.0
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        p = _f(r.get("close")) or _f(r.get("price"))
+        v = _f(r.get("volume")) or _f(r.get("size")) or _f(r.get("tradeVolume"))
+        if p is None or v is None or v <= 0:
+            continue
+        num += p * v
+        den += v
+    if den <= 0:
+        return None
+    vwap = num / den
+    if vwap <= 0:
+        return None
+    return (last_price / vwap - 1) * 100
+
+
+def pressure_from_ticks(ticks: dict | None) -> Optional[int]:
+    """從盤中逐筆的「主動買/主動賣」標記算買賣力道。
+    tickType 1=主動買、2=主動賣(Fugle 慣例)。回 -1/0/1;沒資料回 None。"""
+    rows = (ticks or {}).get("data") if isinstance(ticks, dict) else None
+    if not rows:
+        return None
+    buy = sell = 0.0
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        tt = r.get("tickType")
+        sz = _f(r.get("size")) or _f(r.get("volume")) or 1.0
+        if tt in (1, "1"):
+            buy += sz
+        elif tt in (2, "2"):
+            sell += sz
+    tot = buy + sell
+    if tot <= 0:
+        return None
+    net = (buy - sell) / tot       # -1(全賣) ~ +1(全買)
+    if net >= 0.15:
+        return 1
+    if net <= -0.15:
+        return -1
+    return 0
+
+
+def now_move_and_accel(series: list[tuple[float, float]] | None,
+                       lookback_min: int = 20) -> tuple[Optional[float], Optional[int]]:
+    """從盤中分鐘序列算 (近 lookback 分鐘漲跌%, 加速票)。
+    加速票:把這段切前後兩半,後半斜率 > 前半同向 → +1(越來越快);反向轉弱 → -1。"""
+    if not series:
+        return (None, None)
+    pts = sorted([(t, p) for t, p in series if t is not None and p is not None],
+                 key=lambda x: x[0])
+    if len(pts) < 2:
+        return (None, None)
+    last_t, last_p = pts[-1]
+    cutoff = last_t - lookback_min * 60
+    window = [(t, p) for t, p in pts if t >= cutoff] or pts
+    ref_p = window[0][1]
+    move = (last_p / ref_p - 1) * 100 if ref_p else None
+
+    accel = None
+    if len(window) >= 4:
+        mid = len(window) // 2
+        first_half = (window[mid][1] / window[0][1] - 1) if window[0][1] else 0
+        second_half = (window[-1][1] / window[mid][1] - 1) if window[mid][1] else 0
+        if abs(second_half) > abs(first_half) * 1.15:
+            accel = 1 if second_half * (move or 0) >= 0 else 0
+        elif abs(second_half) < abs(first_half) * 0.6:
+            accel = -1
+        else:
+            accel = 0
+    return (move, accel)
 
 
 def _to_epoch_sec(v: Any) -> Optional[float]:

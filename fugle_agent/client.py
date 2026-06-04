@@ -1,3 +1,4 @@
+# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1】client.py — 加盤中分鐘K抓取
 """Thin wrapper over fugle-marketdata + an automatic mock fallback.
 
 The wrapper exposes a tiny façade so the tool layer doesn't have to care

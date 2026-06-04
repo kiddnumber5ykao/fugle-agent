@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 21:10  重算我該做啥也改批次(原本一筆一筆寫=卡住主因)+寫回批次
+# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1】tools.py — 公司面免費資料+走勢敏感+公司簡介
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -2835,26 +2835,31 @@ def _momentum_light(signals: dict) -> tuple[str, str]:
     所以顯示是 5 段、決策行為仍穩定。"""
     if not signals.get("ok"):
         return ("⚪ 資料不足", "抓不到股價資料,沒辦法看")
-    m = signals.get("dist_ma10_pct", 0) or 0       # 距10日線%:>0 站上、<0 跌破
-    c = signals.get("change_3d_pct", 0) or 0        # 近3天漲跌%
+    m = signals.get("dist_ma10_pct", 0) or 0       # 距10日線%:>0 站上、<0 跌破(趨勢)
+    t = signals.get("today_change_pct", 0) or 0     # 今天漲跌%(敏感主力)
+    c = signals.get("change_3d_pct", 0) or 0        # 近3天漲跌%(阻尼)
     vr = signals.get("vol_ratio_5_20", 1.0) or 1.0  # 近期量 vs 平常量
     big_vol = vr >= 1.3
     low_vol = vr <= 0.7
 
-    # 動能強弱分數:趨勢(離均價)+ 速度(近3天);量能放大/縮小信心
-    s = m * 0.5 + c
+    # 動能強弱分數:趨勢(離均價,當底)+ 速度(今天領頭、近3天當阻尼)
+    # ★2026-06-04:把「今天」拆出來當速度主力,讓單日轉折當天就反應(敏感)。
+    speed = t * 1.3 + c * 0.5
+    trend = m * 0.5
+    s = trend + speed
     if big_vol:
         s *= 1.25
     elif low_vol:
         s *= 0.75
 
-    if s >= 4.5:
+    # 門檻略收緊(敏感):比舊版更早換色
+    if s >= 4.0:
         light = "🔥 強勢"
-    elif s >= 1.2:
+    elif s >= 1.0:
         light = "🟢 偏多"
-    elif s > -1.2:
+    elif s > -1.0:
         light = "🟡 中性"
-    elif s > -4.5:
+    elif s > -4.0:
         light = "🟠 偏弱"
     else:
         light = "🔴 弱勢"
@@ -2863,6 +2868,14 @@ def _momentum_light(signals: dict) -> tuple[str, str]:
     overheated = (light == "🔥 強勢" and m >= 10)
     if overheated:
         light = "🔥 強勢(過熱)"
+
+    # 今天有大動作時,在白話原因前面點出來(跟燈號的即時反應對齊)
+    if t >= 2:
+        _today_lead = f"今天大漲 +{t:.1f}%,"
+    elif t <= -2:
+        _today_lead = f"今天大跌 {t:.1f}%,"
+    else:
+        _today_lead = ""
 
     # 白話原因(像朋友講)
     if light.startswith("🔥"):
@@ -2877,7 +2890,11 @@ def _momentum_light(signals: dict) -> tuple[str, str]:
         tail = "越來越多人進場" if big_vol else ("不過買的人沒特別多" if low_vol else "買盤穩穩的")
         reason = f"穩穩在漲,站在均價之上,{tail},看起來還會往上"
     elif light == "🟡 中性":
-        if m >= 0:
+        if abs(t) >= 2:
+            # 今天有大動作但整體還沒轉向 → 別說「沒什麼動」自打嘴巴
+            where = "還站在均價上面" if m >= 0 else "還在均價下面"
+            reason = f"但拉回整體看,{where}、方向還沒定,先看緊一點別急著動"
+        elif m >= 0:
             reason = "還在均價之上,但這幾天沒什麼動,卡在那上上下下,先看看"
         else:
             reason = "最近卡在區間裡上上下下,看不出要往哪走,先看看"
@@ -2887,7 +2904,7 @@ def _momentum_light(signals: dict) -> tuple[str, str]:
     else:  # 🔴 弱勢
         tail = ",賣壓還很重" if big_vol else (",不過賣壓沒爆" if low_vol else "")
         reason = f"跌得明顯、跌破了近期均價{tail},氣氛很弱,還沒看到止跌"
-    return (light, reason)
+    return (light, _today_lead + reason)
 
 
 def _super_short_term_light(signals: dict) -> str:
@@ -2937,6 +2954,7 @@ _FUNDAMENTALS_SYSTEM_PROMPT = """你是台股基本面整理助手。使用者�
 
 JSON 格式(每個欄位都要):
 {
+  "about": "這家公司在幹嘛,極度白話一句話(像跟完全不懂的人介紹),例如「幫全世界做晶片的代工廠」",
   "estimate": "估值白話描述",
   "estimate_score": int,
   "dividend": "配息白話描述",
@@ -3124,6 +3142,7 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
         # institutional(法人籌碼)已改由官方外資「大戶燈」單獨處理,這裡固定資料不足/0。
         return _store_and_return({
             "ok":                  True,
+            "about":               str(data.get("about", "")).strip(),
             "estimate":            str(data.get("estimate", "資料不足")),
             "dividend":            str(data.get("dividend", "資料不足")),
             "revenue":             str(data.get("revenue", "資料不足")),
@@ -3955,6 +3974,7 @@ def _organize_v2_positions(update_technical: bool, update_fundamentals: bool,
                 chips_light = _chips_light_v2(fd)
                 company_light = _company_light_v2(fd)
                 fund_payload = {
+                    "公司簡介":        fd.get("about", ""),
                     "估值":           fd["estimate"],
                     "配息":           fd["dividend"],
                     "營收動能":        fd["revenue"],
@@ -4111,6 +4131,7 @@ def _organize_v2_watchlist(update_technical: bool, update_fundamentals: bool,
                 chips_light = _chips_light_v2(fd)
                 company_light = _company_light_v2(fd)
                 fund_payload = {
+                    "公司簡介":        fd.get("about", ""),
                     "估值":           fd["estimate"],
                     "配息":           fd["dividend"],
                     "營收動能":        fd["revenue"],
