@@ -1,4 +1,4 @@
-# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1】market_context.py — 大盤即時到秒
+# ⬆️【要上傳 2026-06-05 00:53】market_context.py — 大盤永遠講台股加權(拿掉盤前改講美股)
 """大盤順逆風 — 全頁共用背景,不分個股,不存 Sheet(當下算當下用)。
 
 時間邏輯:
@@ -200,32 +200,11 @@ def get_market_context() -> dict:
     """回大盤順逆風結果(給橫幅 + 買進踩煞車用)。"""
     now = _now_tw()
     updated = now.strftime("%Y-%m-%d %H:%M:%S")
-    # 台北 09:00 前算盤前(用昨晚美股);09:00 起算盤中/盤後(用加權指數)
-    is_premarket = now.hour < 9
-
-    if is_premarket:
-        us = _us_overnight()
-        if not us:
-            return {"light": "🟡 普通", "phase": "盤前", "is_headwind": False,
-                    "reason": "抓不到美股資料,當作普通", "updated": updated}
-        avg = sum(us.values()) / len(us)
-        parts = "、".join(f"{k} {v:+.1f}%" for k, v in us.items())
-        if avg >= 0.5:
-            light, head = "🟢 偏強", False
-            reason = f"昨晚美股偏強({parts}),今天開盤氣氛偏好"
-        elif avg <= -0.5:
-            light, head = "🔴 偏弱", True
-            reason = f"昨晚美股偏弱({parts}),今天開盤氣氛偏差,買進保守點"
-        else:
-            light, head = "🟡 普通", False
-            reason = f"昨晚美股漲跌互見({parts}),開盤氣氛普通"
-        return {"light": light, "phase": "盤前", "is_headwind": head,
-                "reason": reason, "updated": updated}
-
-    # 開盤後:只看加權指數
+    # 大盤橫幅永遠講「台股加權指數」(不分盤前盤後;沒開盤就顯示最近一個收盤的加權)。
+    # 美股有獨立一條,不在這裡混進來。
     s = _twii_signals()
     if not s:
-        return {"light": "🟡 普通", "phase": "盤中", "is_headwind": False,
+        return {"light": "🟡 普通", "phase": "大盤", "is_headwind": False,
                 "reason": "抓不到加權指數,當作普通", "updated": updated}
     chg = s["change_pct"]
     # 顯示「資料本身的時間」(不是系統時間):有即時時間戳就用到秒,
@@ -241,6 +220,6 @@ def get_market_context() -> dict:
     else:
         light, head = "🟡 普通", False
         reason = f"加權在均線附近、{chg:+.1f}%,方向不明 {dtag}"
-    return {"light": light, "phase": "盤中", "is_headwind": head,
+    return {"light": light, "phase": "大盤", "is_headwind": head,
             "reason": reason, "updated": updated,
             "data_time": s.get("data_time", ""), "data_date": s.get("date", "")}
