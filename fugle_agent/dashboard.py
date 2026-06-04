@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-04 19:24】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-04 19:47】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -782,10 +782,16 @@ def _render_stock_list(rows: list[dict], card_fn, act_top: bool = True,
     def _act(r: dict) -> str:
         return _fc_get(r).get("action") or _g(r, "我該做啥", "綜合建議") or ""
 
-    rows = sorted(rows, key=lambda r: _fc_group(_act(r))[0])
+    def _hdr(a: str) -> str:        # 分組標題 = 「怎麼辦」本身(去掉大盤逆風那段)
+        return (a or "").split("　")[0].strip() or "⚪ 資料不足"
+
+    def _pri(a: str) -> int:        # 排序:🔴 要動的排最前 → 🟢 → 🟡 → ⚪
+        return {"🔴": 0, "🟢": 1, "🟡": 2}.get((a or "").strip()[:1], 3)
+
+    rows = sorted(rows, key=lambda r: (_pri(_act(r)), _hdr(_act(r))))
     order, groups = [], {}
     for r in rows:
-        lab = _fc_group(_act(r))[1]
+        lab = _hdr(_act(r))
         if lab not in groups:
             groups[lab] = []
             order.append(lab)
@@ -803,13 +809,12 @@ def _holding_card(r: dict) -> None:
     name = _g(r, "名稱", "name")
     fc = _fc_get(r)
     action = fc.get("action") or _g(r, "我該做啥", "綜合建議")
-    icon, label_w = _fc_label(action)
     pnl = fc.get("pnl") or {}
     pct = pnl.get("損益%")
     pct_txt = f"　{'賺' if pct >= 0 else '賠'} {abs(pct):.1f}%" if pct is not None else ""
     mkt = fc.get("market") or ""
     code_txt = f"{code}·{mkt}" if mkt else code
-    label = f"{icon} {label_w}　{code_txt} {name}{pct_txt}"
+    label = f"{code_txt} {name}{pct_txt}"
     with st.expander(label):
         _detail_common(r, action)
 
@@ -820,11 +825,10 @@ def _watch_card(r: dict) -> None:
     reason = _g(r, "追蹤理由")
     fc = _fc_get(r)
     action = fc.get("action") or _g(r, "我該做啥", "綜合建議")
-    icon, label_w = _fc_label(action)
     mkt = fc.get("market") or ""
     code_txt = f"{code}·{mkt}" if mkt else code
     tag = f"（{reason}）" if reason else ""
-    label = f"{icon} {label_w}　{code_txt} {name}{tag}"
+    label = f"{code_txt} {name}{tag}"
     with st.expander(label):
         _detail_common(r, action)
 
