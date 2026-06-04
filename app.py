@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 22:06  (原最後更新 2026-05-29)(手機儀表板版)
+# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1】app.py — 拿掉頂端標題列
 """Streamlit chat UI for the Fugle agent.
 
 Run locally:    streamlit run app.py
