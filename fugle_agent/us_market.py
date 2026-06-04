@@ -1,3 +1,4 @@
+# ⬆️【要上傳 2026-06-04 21:56】us_market.py — 加美股最新資料時間(到分,台北)
 """US / global stock data + per-ticker news via yfinance.
 
 Covers:
@@ -129,3 +130,22 @@ def news(symbol: str, limit: int = 10) -> list[dict]:
             "summary": body.get("summary", "") or it.get("summary", ""),
         })
     return out
+
+
+def latest_index_time() -> str:
+    """美股最近一筆「分鐘」資料的時間 → 轉台北 YYYY-MM-DD HH:MM。失敗回 ""。
+    (yfinance 分鐘資料延遲約 15 分,所以這是延遲後的資料時間,但比只到「日」精準。)"""
+    if yf is None:
+        return ""
+    try:
+        h = yf.Ticker("^GSPC").history(period="1d", interval="1m")
+        if h is None or h.empty:
+            return ""
+        ts = h.index[-1]
+        try:
+            ts = ts.tz_convert("Asia/Taipei")
+        except Exception:
+            pass
+        return ts.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return ""

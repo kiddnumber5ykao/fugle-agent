@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-04 20:55】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-04 21:56】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -479,7 +479,7 @@ def _market_ctx_cached() -> dict:
 def _us_market_cached() -> dict:
     """美股三大指數(yfinance,延遲約 15 分)。回 {items, date, light}。
     light 算法跟大盤盤前一樣:三指數平均 ≥+0.5%→偏強、≤-0.5%→偏弱、其餘普通。"""
-    out: dict = {"items": {}, "date": "", "light": "🟡 普通"}
+    out: dict = {"items": {}, "date": "", "time": "", "light": "🟡 普通"}
     try:
         from fugle_agent import us_market
         asof = ""
@@ -491,6 +491,7 @@ def _us_market_cached() -> dict:
                     asof = str(q["asOf"])[:10]
         out["date"] = asof
         if out["items"]:
+            out["time"] = us_market.latest_index_time()    # 台北 到分(延遲約15分)
             avg = sum(out["items"].values()) / len(out["items"])
             out["light"] = "🟢 偏強" if avg >= 0.5 else ("🔴 偏弱" if avg <= -0.5 else "🟡 普通")
     except Exception:
@@ -516,7 +517,8 @@ def _render_us_line() -> None:
     for zh, pct in items.items():
         col = "var(--color-text-success)" if pct >= 0 else "var(--color-text-danger)"
         parts.append(f'{zh} <span style="color:{col};font-weight:500">{pct:+.1f}%</span>')
-    dtag = f"(資料 {us['date']}・延遲約15分)" if us.get("date") else "(延遲約15分)"
+    when = us.get("time") or us.get("date") or ""        # 優先到分,退而到日
+    dtag = f"(資料 {when}・延遲約15分)" if when else "(延遲約15分)"
     st.markdown(
         f'<div style="background:{bg};border:0.5px solid {bd};border-radius:10px;'
         f'padding:8px 12px;margin-bottom:10px;font-size:13px">'
