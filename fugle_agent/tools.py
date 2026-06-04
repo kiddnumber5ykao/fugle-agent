@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 20:40  寫回 Sheet 改批次(最快,退回平行)+欄位改名+批次1-3
+# 📅 ★最新版★ 上傳於 2026-06-02 21:10  重算我該做啥也改批次(原本一筆一筆寫=卡住主因)+寫回批次
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -100,6 +100,7 @@ except Exception:  # pragma: no cover — fallback for unit tests / mock-only us
 
 from . import backtest as bt
 from . import etf_holdings
+from . import free_fetch
 from . import fund_data
 from . import sheets
 from . import sheets_writer
@@ -2926,30 +2927,30 @@ _fundamentals_session_cache: dict[str, dict] = {}   # sym → result,跨 organiz
 
 
 # 抽出到系統提示 → Anthropic 會幫我們 cache,第 2 個 stock 之後便宜 90%。
-_FUNDAMENTALS_SYSTEM_PROMPT = """你是台股基本面查詢助手。對使用者給的代號 + 名稱,用 web_search 查最新資料並彙整。
+# ★2026-06-04 改版:拿掉 web_search。改成「使用者訊息會直接帶官方免費事實」,
+#   Haiku 只負責把數字翻成白話 + 評分 → 純文字呼叫,成本趨近於零。
+_FUNDAMENTALS_SYSTEM_PROMPT = """你是台股基本面整理助手。使用者會給你某一檔股票的**官方免費事實**
+(估值/配息來自證交所、月營收來自證交所、新聞標題來自 Google News)。
+你的工作是把這些事實翻成**白話描述 + 評分**。**只能用使用者給的事實,不要自己編造數字、不要查網路。**
 
 **只回 JSON**,前後不要任何文字、不要 code fence、不要 ``` 包起來。
 
 JSON 格式(每個欄位都要):
 {
-  "estimate": "估值白話描述,含本益比",
+  "estimate": "估值白話描述",
   "estimate_score": int,
   "dividend": "配息白話描述",
   "dividend_score": int,
   "revenue": "營收動能白話描述",
   "revenue_score": int,
-  "institutional": "法人籌碼白話描述",
-  "institutional_score": int,
-  "news": "近期 1-2 週新聞重點",
-  "news_score": int,
-  "data_date": "你查到資料的最新日期 (YYYY-MM-DD 格式,例如 2026-05-28),通常是最新新聞或月營收的日期"
+  "news": "近期新聞重點(一句話)",
+  "news_score": int
 }
 
-評分標準(全部 int):
-- estimate: 本益比<15→2 / 15-20→1 / 20-25→0 / 25-30→-1 / >30→-2
+評分標準(全部 int,依使用者給的數字判斷):
+- estimate: 本益比<15→2 / 15-20→1 / 20-25→0 / 25-30→-1 / >30→-2(沒有本益比就看股價淨值比:<1.5→1 / 1.5-3→0 / >3→-1)
 - dividend: 殖利率<1%→-1 / 1-3%→0 / 3-5%→1 / >5%→2
 - revenue: 年增率<-10→-2 / -10~0→-1 / 0~10→0 / 10~25→1 / >25→2
-- institutional: 連續賣超→-2 / 賣超→-1 / 持平→0 / 買超→1 / 大買→2
 - news: 重大利空→-2 / 利空→-1 / 中性→0 / 利多→1 / 重大利多→2
 
 ⚠️ 描述文字要**超白話、像跟朋友聊天**,不要財經術語、不要一堆數字。讓完全不懂股票的人也秒懂。
@@ -2957,10 +2958,8 @@ JSON 格式(每個欄位都要):
 - estimate 不要寫「本益比 28 倍偏高」→ 寫「現在這價位算有點貴」
 - dividend 不要寫「殖利率 4.2%」→ 寫「有發股息,還算大方」
 - revenue 不要寫「月增 12% 年增 -5%」→ 寫「生意比上個月好,但比去年差一點」
-- institutional 不要寫「外資買超 3000 張」→ 寫「外資最近一直在買」
-- news → 寫「最近接到大訂單」這種一句話重點
-每句 15~30 字、口語。資料找不到該項就寫「資料不足」+ score 設 0。
-data_date 找不到具體日期就寫今天日期。"""
+- news → 看標題抓重點,寫「最近接到大訂單」這種一句話
+每句 15~30 字、口語。**某一項使用者標示「查無」就寫「資料不足」+ 該 score 設 0。**"""
 
 
 # Haiku 4.5 估價(美金/token,粗估,實際以帳單為準)
@@ -2988,7 +2987,10 @@ def _estimate_call_cost(resp) -> float:
 
 
 def _fetch_fundamentals(sym: str, name: str) -> dict:
-    """用 Anthropic API + web_search 抓基本面 5 項 + 計算分數。
+    """抓公司基本面 + 計算分數。★2026-06-04 改版:
+    先用 free_fetch 免費抓官方事實(估值/配息/月營收/新聞標題),
+    再做一次「純文字 Haiku」呼叫翻成白話 + 評分(不再用付費 web_search)。
+    institutional(法人籌碼)改由官方外資大戶燈單獨處理,這裡固定資料不足。
     沒設 ANTHROPIC_API_KEY 或失敗時回 ok=False。
     內建節流避免 429,並支援同 session 快取(同一檔不重複查)。"""
     global _last_fundamentals_call_ts
@@ -3021,9 +3023,30 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
     # (GitHub Actions 沒設 secret 時會把 env var 注成 "")
     model = (os.getenv("ANTHROPIC_MODEL") or "").strip() or "claude-haiku-4-5-20251001"
 
-    # 🚀 Token 優化:長指令搬到 system prompt + cache_control
-    # 第 1 檔正常付費,後面 11 檔 system 部分便宜 90%(Anthropic prompt caching)
-    user_msg = f"查台股 {sym} {name}".strip()
+    # ★2026-06-04:先免費抓官方事實(估值/配息/月營收/新聞標題),取代付費 web_search。
+    try:
+        facts = free_fetch.gather_free_facts(sym, name)
+    except Exception as e:
+        print(f"⚠️ free_fetch 失敗 sym={sym}: {type(e).__name__}: {e}", flush=True)
+        facts = {"facts_text": "", "data_date": "", "has_any": False}
+    free_data_date = facts.get("data_date") or ""
+
+    # 三項全部查無 → 不用浪費 Haiku 呼叫,直接回資料不足
+    if not facts.get("has_any"):
+        return _store_and_return({
+            "ok": True,
+            "estimate": "資料不足", "dividend": "資料不足", "revenue": "資料不足",
+            "institutional": "資料不足", "news": "資料不足",
+            "data_date": free_data_date,
+            "estimate_score": 0, "dividend_score": 0, "revenue_score": 0,
+            "institutional_score": 0, "news_score": 0,
+            "cost_usd": 0.0,
+        })
+
+    # 🚀 Token 優化:長指令搬到 system prompt + cache_control(後面每檔便宜 90%)。
+    # 純文字事實塊塞進 user message — 不再呼叫 web_search。
+    user_msg = (f"請整理台股 {sym} {name}。以下是官方免費事實,只能根據這些判斷:\n\n"
+                + facts.get("facts_text", "")).strip()
 
     # 主呼叫 + 429 重試:每分鐘 token 配額(50K)爆掉時,等 60 秒讓配額重置再試。
     # 配額是「每分鐘」,所以 sleep 要夠長(60s),且多試幾次才有意義。
@@ -3039,8 +3062,7 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
                     "text": _FUNDAMENTALS_SYSTEM_PROMPT,
                     "cache_control": {"type": "ephemeral"},
                 }],
-                # web_search 查 4 次,基本面查得更深更完整(較貴,但 Tier 2 夠用)
-                tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 4}],
+                # ★2026-06-04:拿掉 web_search(最貴的部分)。純文字呼叫,事實已在 user_msg 裡。
                 messages=[{"role": "user", "content": user_msg}],
             )
             break
@@ -3098,18 +3120,20 @@ def _fetch_fundamentals(sym: str, name: str) -> dict:
                 "error": f"JSON 解析失敗:{text[:100]!r}",
             })
 
+        # data_date 用「免費資料的真實來源日期」(證交所那天),比 Haiku 自報的可靠。
+        # institutional(法人籌碼)已改由官方外資「大戶燈」單獨處理,這裡固定資料不足/0。
         return _store_and_return({
             "ok":                  True,
             "estimate":            str(data.get("estimate", "資料不足")),
             "dividend":            str(data.get("dividend", "資料不足")),
             "revenue":             str(data.get("revenue", "資料不足")),
-            "institutional":       str(data.get("institutional", "資料不足")),
+            "institutional":       "資料不足",
             "news":                str(data.get("news", "資料不足")),
-            "data_date":           str(data.get("data_date", "")).strip()[:10],
+            "data_date":           (free_data_date or str(data.get("data_date", "")).strip())[:10],
             "estimate_score":      _safe_int(data.get("estimate_score")),
             "dividend_score":      _safe_int(data.get("dividend_score")),
             "revenue_score":       _safe_int(data.get("revenue_score")),
-            "institutional_score": _safe_int(data.get("institutional_score")),
+            "institutional_score": 0,
             "news_score":          _safe_int(data.get("news_score")),
             "cost_usd":            _estimate_call_cost(resp),
         })
@@ -3634,6 +3658,7 @@ def _recompute_advice(scope: str = "all") -> dict:
     if do_pos:
         # 讀完整 row(要現價 + 目標價 才能判斷「到價該不該賣」)
         tab = os.getenv(sheets.POSITIONS_TAB_ENV, sheets.DEFAULT_POSITIONS_TAB)
+        payloads = []
         for r in (sheets.fetch_tab(tab) or []):
             if r.get("_error"):
                 continue
@@ -3641,22 +3666,22 @@ def _recompute_advice(scope: str = "all") -> dict:
             if not sym:
                 continue
             advice = _position_advice(r)   # 到價+技術 的賣出邏輯
-            wb = sheets_writer.upsert_position(
-                symbol=sym, 代號=sym,
-                **{"我該做啥": advice, "綜合建議": advice})
-            if wb.get("ok"):
-                n_pos += 1
+            payloads.append({"symbol": sym, "代號": sym,
+                             "我該做啥": advice, "綜合建議": advice})
+        ok = _bulk_or_parallel(tab, payloads, sheets_writer.upsert_position)
+        n_pos = sum(1 for v in ok.values() if v)
 
     if do_wl:
+        wtab = os.getenv(sheets.WATCHLIST_TAB_ENV, sheets.DEFAULT_WATCHLIST_TAB)
+        payloads = []
         for sym, lg in _build_existing_lights_map("watchlist").items():
             advice = _what_to_do(lg.get("short", ""), lg.get("super_short", ""),
                                  lg.get("chips", ""), lg.get("company", ""),
                                  is_position=False)
-            wb = sheets_writer.upsert_watchlist_item(
-                symbol=sym, 代號=sym,
-                **{"我該做啥": advice, "綜合建議": advice})
-            if wb.get("ok"):
-                n_wl += 1
+            payloads.append({"symbol": sym, "代號": sym,
+                             "我該做啥": advice, "綜合建議": advice})
+        ok = _bulk_or_parallel(wtab, payloads, sheets_writer.upsert_watchlist_item)
+        n_wl = sum(1 for v in ok.values() if v)
 
     return {"positions": n_pos, "watchlist": n_wl}
 
@@ -4233,10 +4258,11 @@ async def organize_all_technical(args: dict) -> dict:
 
 @tool(
     "organize_all_deep",
-    "**「整體深度分析」一鍵工具** — 技術 + 基本面全套。除了技術面,對每檔還用 web_search 抓估值、"
-    "配息、營收動能、法人籌碼、近期新聞,給 2 個基本面燈號(籌碼面 + 公司面)、寫完整綜合建議。"
+    "**「整體深度分析」一鍵工具** — 技術 + 基本面全套。除了技術面,對每檔還抓估值、"
+    "配息、營收動能、近期新聞(改用證交所/Google News 官方免費資料 + 一次純文字 AI 翻白話),"
+    "給公司面燈號、寫完整綜合建議。(法人籌碼改由官方外資大戶燈每日免費更新。)"
     "**使用者說「整體深度分析」「深度分析」「跑全部」直接呼叫這個**。"
-    "**告訴使用者**這會跑很久(每檔 1-2 分鐘,12 檔可能 15-25 分鐘),建議週末或晚上跑。"
+    "**告訴使用者**這會跑一陣子,建議週末或晚上跑。"
     "回覆**只**說「深度分析整理好了」+ 簡短列看好/看衰的代號,不要長篇大論。"
     "**單檔重跑**:若使用者說「某檔失敗 / 沒抓到 / 幫我重跑 2330 的深度」,用 symbols=['2330'] 只跑那幾檔,"
     "深度分析很貴,千萬不要為了一兩檔失敗就重跑全部。",
