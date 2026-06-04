@@ -403,12 +403,8 @@ def _render_market_banner() -> bool:
     head = bool(ctx.get("is_headwind"))
     light = ctx.get("light", "🟡 普通")
     reason = ctx.get("reason", "")
-    # 跟卡片下方「資料時間」同一種相對講法(剛剛/X分前),三處用法一致。
-    upd = ctx.get("updated", "")
-    if upd:
-        rel, _ = _rel_time(upd, 60 * 24)
-        if rel and rel != "尚未更新":
-            reason = f"{reason} · 更新 {rel}"
+    # 注意:大盤橫幅顯示的是「資料本身的時間」(已含在 reason 的 dtag 裡,到秒),
+    # 不是系統時間,所以這裡不再附加「更新 剛剛」那種系統時間。
     if head:
         bg, bd = "rgba(226,75,74,.10)", "rgba(226,75,74,.40)"
     elif "🟢" in light:

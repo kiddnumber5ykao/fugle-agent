@@ -55,10 +55,60 @@ def _index_bars() -> list[dict]:
     return []
 
 
-def _live_index_today(today_str: str) -> tuple[float | None, str]:
-    """盤中抓『今天』的即時加權指數。回 (指數, 日期) 或 (None, "")。
-    1) Fugle 即時報價 IX0001(跟你個股同源、不延遲)。
-    2) 退 yfinance ^TWII(延遲 ~15 分,但 history 最後一根盤中通常就是今天)。"""
+def _fugle_data_time(q: dict) -> str:
+    """從 Fugle 報價抓『資料本身的時間』(不是系統時間)→ 台北 YYYY-MM-DD HH:MM:SS。
+    抓不到回 ""。相容多種格式:epoch 秒/毫秒/微秒/奈秒,或 ISO 字串。"""
+    def _from_epoch(val) -> datetime.datetime | None:
+        try:
+            v = float(val)
+        except (ValueError, TypeError):
+            return None
+        if v <= 0:
+            return None
+        if v >= 1e18:      v /= 1e9   # 奈秒
+        elif v >= 1e15:    v /= 1e6   # 微秒
+        elif v >= 1e12:    v /= 1e3   # 毫秒
+        # 否則當作秒
+        try:
+            return (datetime.datetime.fromtimestamp(v, datetime.timezone.utc)
+                    .astimezone(datetime.timezone(datetime.timedelta(hours=8))))
+        except (OSError, ValueError, OverflowError):
+            return None
+
+    if not isinstance(q, dict):
+        return ""
+    cands = [q.get("lastUpdated"), q.get("at"), q.get("time")]
+    lt = q.get("lastTrade")
+    if isinstance(lt, dict):
+        cands.append(lt.get("time"))
+    for c in cands:
+        if c is None:
+            continue
+        if isinstance(c, (int, float)):
+            dt = _from_epoch(c)
+            if dt:
+                return dt.strftime("%Y-%m-%d %H:%M:%S")
+        if isinstance(c, str) and c.strip():
+            s = c.strip()
+            if s.lstrip("-").isdigit():        # 純數字字串 → 當 epoch
+                dt = _from_epoch(s)
+                if dt:
+                    return dt.strftime("%Y-%m-%d %H:%M:%S")
+            try:                                # ISO 字串
+                dt = datetime.datetime.fromisoformat(s.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=datetime.timezone.utc)
+                dt = dt.astimezone(datetime.timezone(datetime.timedelta(hours=8)))
+                return dt.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                pass
+    return ""
+
+
+def _live_index_today(today_str: str) -> tuple[float | None, str, str]:
+    """盤中抓『今天』的即時加權指數。回 (指數, 日期, 資料時間到秒) 或 (None, "", "")。
+    1) Fugle 即時報價 IX0001(跟你個股同源、不延遲,且帶資料時間戳)。
+    2) 退 yfinance ^TWII(延遲 ~15 分,只有日期、沒有到秒的盤中時間)。"""
     # 1) Fugle 即時報價
     try:
         from fugle_agent.client import FugleClient
@@ -78,20 +128,20 @@ def _live_index_today(today_str: str) -> tuple[float | None, str]:
                         pass
             if level is not None:
                 qd = str(q.get("date", ""))[:10]
-                return level, (qd or today_str)
+                return level, (qd or today_str), _fugle_data_time(q)
     except Exception:
         pass
-    # 2) yfinance ^TWII 退路
+    # 2) yfinance ^TWII 退路(沒有到秒的資料時間)
     try:
         r = us_market.quote(_TWII)
         if isinstance(r, dict) and not r.get("error"):
             level = r.get("lastPrice")
             qd = str(r.get("asOf", ""))[:10]
             if isinstance(level, (int, float)) and qd and qd >= today_str:
-                return float(level), qd
+                return float(level), qd, ""
     except Exception:
         pass
-    return None, ""
+    return None, "", ""
 
 
 def _twii_signals() -> dict | None:
@@ -120,14 +170,16 @@ def _twii_signals() -> dict | None:
     ma10 = sum(completed[-10:]) / min(len(completed), 10)
 
     # 今天的指數:先試即時;失敗才退回最後一根日K
-    last, date_used = _live_index_today(today_str)
+    last, date_used, data_time = _live_index_today(today_str)
     if last is None or date_used < today_str or abs(last - prev_close) <= 1e-6:
         last = closes[-1]
         date_used = dates[-1]
+        data_time = ""   # 退回日K → 沒有到秒的盤中時間,只剩日期
 
     return {
         "close": last,
         "ma10": ma10,
+        "data_time": data_time,
         "change_pct": (last / prev_close - 1) * 100 if prev_close else 0.0,
         "above_ma10": last >= ma10,
         "date": date_used,
@@ -176,7 +228,10 @@ def get_market_context() -> dict:
         return {"light": "🟡 普通", "phase": "盤中", "is_headwind": False,
                 "reason": "抓不到加權指數,當作普通", "updated": updated}
     chg = s["change_pct"]
-    dtag = f"(資料 {s.get('date', '')})" if s.get("date") else ""
+    # 顯示「資料本身的時間」(不是系統時間):有即時時間戳就用到秒,
+    # 退回日K時只剩日期(收盤後/抓不到盤中即時時)。
+    when = s.get("data_time") or s.get("date", "")
+    dtag = f"(資料 {when})" if when else ""
     if s["above_ma10"] and chg >= 0:
         light, head = "🟢 順風", False
         reason = f"加權站上 10 日線、{chg:+.1f}%,大盤偏多,順風 {dtag}"
@@ -187,4 +242,5 @@ def get_market_context() -> dict:
         light, head = "🟡 普通", False
         reason = f"加權在均線附近、{chg:+.1f}%,方向不明 {dtag}"
     return {"light": light, "phase": "盤中", "is_headwind": head,
-            "reason": reason, "updated": updated}
+            "reason": reason, "updated": updated,
+            "data_time": s.get("data_time", ""), "data_date": s.get("date", "")}
