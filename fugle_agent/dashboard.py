@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-04 22:32】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-04 23:13】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -946,6 +946,39 @@ def _risk_line(r: dict, is_holding: bool) -> str:
             f'<br><span style="{mut};font-size:13px">{body}</span></div>')
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _fund_by_code() -> dict:
+    """合併「股票部位」+「追蹤清單」的公司資料,讓體質/估值/簡介/新聞跟著『代號』走 —
+    搬到哪一邊都看得到(買進追蹤的股 → 持股那邊立刻有體質,不空白)。
+    同一代號兩邊都有 → 用「公司更新時間」較新的那筆;整列沒資料的跳過,不蓋掉有料的。"""
+    cols = ["公司簡介", "公司體質", "估值", "配息", "營收動能"]
+    out: dict[str, dict] = {}
+
+    def _scan(rows):
+        for r in (rows or []):
+            if not isinstance(r, dict) or r.get("_error"):
+                continue
+            code = (_g(r, "代號", "symbol") or "").lstrip("'").strip()
+            if not code or not any(_g(r, c) for c in cols):
+                continue
+            t = _g(r, "公司更新時間", "基本面資料時間")
+            prev = out.get(code)
+            if prev is not None and prev.get("公司更新時間", "") >= (t or ""):
+                continue
+            d = {c: _g(r, c) for c in cols}
+            d["新聞"] = _g(r, "新聞", "近期新聞重點")
+            d["公司更新時間"] = t
+            out[code] = d
+
+    try:
+        from fugle_agent import sheets
+        _scan(_cached_tab(os.getenv("PORTFOLIO_POSITIONS_TAB", sheets.DEFAULT_POSITIONS_TAB)))
+        _scan(_cached_watchlist())
+    except Exception:
+        pass
+    return out
+
+
 def _detail_common(r: dict, action: str) -> None:
     """卡片內容(全部即時算):現價/損益 → 三盞預測 → 怎麼辦 → 關於這檔。"""
     mut = "color:#5F5E5A"
@@ -993,13 +1026,20 @@ def _detail_common(r: dict, action: str) -> None:
                     f'padding-top:8px">👉 <b>怎麼辦</b>　{act}</div>', unsafe_allow_html=True)
 
     # 4) 關於這檔(備註區):體質(最上面、最顯眼)→ 公司在幹嘛 → 新聞 → 估值/配息/營收
-    health = _g(r, "公司體質")
-    about = _g(r, "公司簡介")
+    # 公司資料跟著「代號」走:這一頁沒有就去另一頁找(買進追蹤的股,持股立刻有體質)。
+    _code = (_g(r, "代號", "symbol") or "").lstrip("'").strip()
+    _fub = _fund_by_code().get(_code, {})
+
+    def _fund(col: str, *alias: str) -> str:
+        return _g(r, col, *alias) or _fub.get(col, "")
+
+    health = _fund("公司體質")
+    about = _fund("公司簡介")
     items = [
-        ("新聞", _g(r, "新聞", "近期新聞重點")),
-        ("估值", _g(r, "估值")),
-        ("配息", _g(r, "配息")),
-        ("營收", _g(r, "營收動能")),
+        ("新聞", _fund("新聞", "近期新聞重點")),
+        ("估值", _fund("估值")),
+        ("配息", _fund("配息")),
+        ("營收", _fund("營收動能")),
     ]
     body = "".join(
         f'<div style="display:flex;gap:8px;font-size:13px;padding:2px 0">'
@@ -1015,7 +1055,7 @@ def _detail_common(r: dict, action: str) -> None:
                         unsafe_allow_html=True)
         if body:
             st.markdown(body, unsafe_allow_html=True)
-        ft, fs = _rel_time(_g(r, "公司更新時間", "基本面資料時間"), 60 * 24 * 5)
+        ft, fs = _rel_time(_fund("公司更新時間", "基本面資料時間"), 60 * 24 * 5)
         st.caption(f"公司資料 {ft}{' ⚠️舊' if fs else ''}")
 
 
