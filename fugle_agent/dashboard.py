@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-04 23:48】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-05 00:21】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -874,9 +874,7 @@ def _holding_card(r: dict) -> None:
     pnl = fc.get("pnl") or {}
     pct = pnl.get("損益%")
     pct_txt = f"　{'賺' if pct >= 0 else '賠'} {abs(pct):.1f}%" if pct is not None else ""
-    mkt = fc.get("market") or ""
-    code_txt = f"{code}·{mkt}" if mkt else code
-    label = f"{code_txt} {name}{pct_txt}"
+    label = f"{code} {name}{pct_txt}"
     with st.expander(label):
         _detail_common(r, action)
 
@@ -887,10 +885,8 @@ def _watch_card(r: dict) -> None:
     reason = _g(r, "追蹤理由")
     fc = _fc_get(r)
     action = fc.get("action") or _g(r, "我該做啥", "綜合建議")
-    mkt = fc.get("market") or ""
-    code_txt = f"{code}·{mkt}" if mkt else code
     tag = f"（{reason}）" if reason else ""
-    label = f"{code_txt} {name}{tag}"
+    label = f"{code} {name}{tag}"
     with st.expander(label):
         _detail_common(r, action)
 
@@ -975,7 +971,10 @@ def _detail_common(r: dict, action: str) -> None:
     if price is not None:
         line = f'💲 <b>現價</b>　{price:g}'
         if mkt:
-            line += f'　<span style="{mut};font-size:12px">{mkt}</span>'
+            _mc = {"上市": ("#E6F1FB", "#185FA5"), "上櫃": ("#FAEEDA", "#854F0B"),
+                   "興櫃": ("#F1EFE8", "#5F5E5A")}.get(mkt, ("#F1EFE8", "#5F5E5A"))
+            line += (f'　<span style="background:{_mc[0]};color:{_mc[1]};padding:1px 8px;'
+                     f'border-radius:6px;font-size:12px;font-weight:500">{mkt}</span>')
         if pnl.get("損益%") is not None:
             v = pnl["損益%"]
             col = "var(--color-text-success)" if v >= 0 else "var(--color-text-danger)"
