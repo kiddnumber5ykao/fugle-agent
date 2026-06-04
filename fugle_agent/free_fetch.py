@@ -1,4 +1,4 @@
-# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1】free_fetch.py — 免費官方資料
+# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1.1】free_fetch.py — 免費官方資料 + 上櫃(櫃買)估值
 """免費官方資料抓取 — 估值 / 月營收 / 新聞,給 _fetch_fundamentals 用。
 
 目的:把最貴的 Anthropic `web_search` 拿掉。改成:
@@ -121,14 +121,62 @@ def _build_valuation_cache() -> dict[str, dict]:
     return out
 
 
+def _roc_date_to_iso(s: Any) -> str:
+    """民國日期(115/06/04 或 1150604)→ 2026-06-04;已是西元就直接轉。失敗回 ""。"""
+    digs = re.sub(r"[^0-9]", "", str(s or ""))
+    if len(digs) == 7:                       # ROC: 1150604
+        return f"{int(digs[:3]) + 1911:04d}-{digs[3:5]}-{digs[5:7]}"
+    if len(digs) == 8:                       # 西元: 20260604
+        return f"{digs[:4]}-{digs[4:6]}-{digs[6:8]}"
+    return ""
+
+
+# 上櫃(櫃買中心)個股估值 OpenAPI:本益比 / 殖利率 / 股價淨值比
+_TPEX_VALUATION_URL = "https://www.tpex.org.tw/openapi/v1/tpex_mainboard_peratio_analysis"
+
+
+def _build_tpex_valuation() -> dict[str, dict]:
+    """上櫃個股估值(櫃買)。欄位用名稱比對(中英都吃)。失敗回 {}。"""
+    out: dict[str, dict] = {}
+    try:
+        arr = json.loads(_http_get(_TPEX_VALUATION_URL))
+    except Exception:
+        return out
+    if not isinstance(arr, list):
+        return out
+    today = date.today().strftime("%Y-%m-%d")
+    for d in arr:
+        if not isinstance(d, dict):
+            continue
+        sym = _clean_sym(_pick(d, "代號") or _pick(d, "SecuritiesCompanyCode")
+                         or _pick(d, "Code"))
+        if not sym:
+            continue
+        out[sym] = {
+            "per":   _to_float(_pick(d, "本益比") or _pick(d, "PriceEarningRatio") or _pick(d, "PER")),
+            "yield": _to_float(_pick(d, "殖利率") or _pick(d, "YieldRatio") or _pick(d, "Yield")),
+            "pbr":   _to_float(_pick(d, "股價淨值比") or _pick(d, "淨值比")
+                               or _pick(d, "PriceBookRatio") or _pick(d, "PBR")),
+            "data_date": _roc_date_to_iso(_pick(d, "日期") or _pick(d, "Date")) or today,
+        }
+    return out
+
+
 def get_valuation(sym: str) -> dict:
-    """回單檔估值 {per, yield, pbr, data_date}。抓不到回各欄 None。"""
+    """回單檔估值 {per, yield, pbr, data_date}。上市(證交所)+ 上櫃(櫃買)都查。
+    抓不到回各欄 None。"""
     global _valuation_cache
     if _valuation_cache is None:
+        cache: dict[str, dict] = {}
         try:
-            _valuation_cache = _build_valuation_cache()
+            cache.update(_build_valuation_cache())     # 上市(證交所 BWIBBU)
         except Exception:
-            _valuation_cache = {}
+            pass
+        try:
+            cache.update(_build_tpex_valuation())      # 上櫃(櫃買 OpenAPI)
+        except Exception:
+            pass
+        _valuation_cache = cache
     return _valuation_cache.get(_clean_sym(sym),
                                 {"per": None, "yield": None, "pbr": None, "data_date": ""})
 
@@ -268,7 +316,7 @@ def gather_free_facts(sym: str, name: str = "") -> dict:
             parts.append(f"股價淨值比 {val['pbr']:.2f} 倍")
         if val.get("yield") is not None:
             parts.append(f"現金殖利率 {val['yield']:.2f}%")
-        lines.append("【估值/配息(證交所 " + (val.get("data_date") or "") + ")】"
+        lines.append("【估值/配息(官方 " + (val.get("data_date") or "") + ")】"
                      + "、".join(parts))
     else:
         lines.append("【估值/配息】查無官方估值資料(可能是上櫃/興櫃或當日無資料)")
