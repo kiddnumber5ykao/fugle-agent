@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 00:34】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-05 00:40】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -420,9 +420,9 @@ def _prefetch_live_lights(symbols: tuple[str, ...]) -> dict:
     return out
 
 
-@st.cache_data(ttl=15, show_spinner=False)
+@st.cache_data(ttl=30, show_spinner=False)
 def _prefetch_forecasts(items: tuple, is_holding: bool) -> dict:
-    """一整頁的三盞預測 + 怎麼辦 + 現價/損益,即時並行算好(快取 15 秒)。
+    """一整頁的三盞預測 + 怎麼辦 + 現價/損益,即時並行算好(快取 30 秒)。
     items = ((代號, 股數, 總成本), ...)。任何失敗都回空 dict,不讓整頁壞。"""
     try:
         from fugle_agent import live_forecast

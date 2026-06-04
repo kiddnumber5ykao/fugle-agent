@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 00:21】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
+# ⬆️【要上傳 2026-06-05 00:40】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -2448,34 +2448,49 @@ async def organize_all(args: dict) -> dict:
 #   「整體深度分析」→ organize_all_deep   (技術 + 基本面,15~25 分)
 # =============================================================================
 
+# 🗄️ 日線快取:日線一天只變一次,同一檔 5 分鐘內重算就不再重抓(這是最重的一段下載)。
+# process 內快取(GitHub Actions 每次 run 是新 process;Streamlit 跨重跑共用)。
+_DAILY_CACHE: dict[str, tuple[float, dict]] = {}
+_DAILY_TTL = 300.0
+
+
+def _fetch_daily_candles_cached(sym: str, from_date: str, to_date: str) -> dict | None:
+    """抓 400 天日線(自帶 429 重試)+ 5 分鐘 process 內快取。失敗回 None。"""
+    key = str(sym).strip()
+    now = time.time()
+    hit = _DAILY_CACHE.get(key)
+    if hit and now - hit[0] < _DAILY_TTL:
+        return hit[1]
+    data = None
+    for attempt in range(3):
+        try:
+            data = _client.candles(sym, from_date=from_date, to_date=to_date)
+            break
+        except Exception as e:
+            err_s = str(e)
+            if ("429" in err_s or "rate limit" in err_s.lower()) and attempt < 2:
+                print(f"⏳ {sym} Fugle 429,等 {20 * (attempt + 1)} 秒重試", flush=True)
+                time.sleep(20 * (attempt + 1))   # 20s, 40s 漸進
+                continue
+            return None   # 其他錯誤直接放棄(呼叫端回 ok:False)
+    if data is not None and data.get("data"):
+        _DAILY_CACHE[key] = (now, data)
+    return data
+
+
 def _compute_short_signals(sym: str) -> dict:
     """短線版的訊號計算 — 對單一代號抓 K 線 + 量,
     產出 6 段白話描述 + 內部數值給 2 個技術燈號計算用。
-    內建 429 重試:遇到 Fugle rate limit 自動等 20 秒再試一次。"""
+    內建 429 重試:遇到 Fugle rate limit 自動等 20 秒再試一次。
+    日線部分有 5 分鐘快取(_fetch_daily_candles_cached),即時報價仍每次抓新的。"""
     try:
         to_dt = datetime.now()
         from_dt = to_dt - timedelta(days=400)
-        # 🛡️ 自帶 429 重試 — Fugle 流量管制下會 burst 失敗,等 20 秒讓配額重置
-        data = None
-        for attempt in range(3):
-            try:
-                data = _client.candles(sym,
-                                        from_date=from_dt.strftime("%Y-%m-%d"),
-                                        to_date=to_dt.strftime("%Y-%m-%d"))
-                break
-            except Exception as e:
-                err_s = str(e)
-                if ("429" in err_s or "rate limit" in err_s.lower()) and attempt < 2:
-                    print(f"⏳ {sym} Fugle 429,等 {20 * (attempt + 1)} 秒重試",
-                          flush=True)
-                    time.sleep(20 * (attempt + 1))   # 20s, 40s 漸進
-                    continue
-                # 其他錯誤直接放棄
-                return {"ok": False, "mode": _client.mode,
-                        "error": f"{type(e).__name__}: {e}"}
+        data = _fetch_daily_candles_cached(
+            sym, from_dt.strftime("%Y-%m-%d"), to_dt.strftime("%Y-%m-%d"))
         if data is None:
             return {"ok": False, "mode": _client.mode,
-                    "error": "Fugle 重試 3 次後仍失敗"}
+                    "error": "Fugle 抓日線失敗(重試後仍失敗)"}
         bars = data.get("data", [])
         if len(bars) < 7:
             return {"ok": False, "mode": _client.mode,
