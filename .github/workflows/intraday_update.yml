@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-01 22:06  (原最後更新 2026-05-29)(多 job:重算→技術→重算我該做啥)
+# ⬆️【要上傳 2026-06-04 19:24】intraday_update.yml — ⛔ 關掉每15分自動排程(走勢已改即時算)
 name: 盤中更新 (重算+技術)
 run-name: 盤中更新 [${{ inputs.scope || 'all' }}]
 
@@ -10,10 +10,10 @@ on:
         type: string
         required: false
         default: all
-  schedule:
-    # 台股開盤 9:00–13:30(台北)= UTC 01:00–05:30,每 15 分自動跑盤中更新
-    # (只更新技術面 + 我該做啥,免費,不花 AI 錢)。排程觸發時 scope 預設 all。
-    - cron: "*/15 1-5 * * 1-5"
+  # ⛔ 2026-06-04 關閉自動排程 — 走勢已改成「打開頁面即時算」,這個 15 分批次不再需要。
+  # 想暫時手動跑還是可以(上面 workflow_dispatch)。要恢復自動就把下面三行取消註解。
+  # schedule:
+  #   - cron: "*/15 1-5 * * 1-5"
 
 env:
   ANTHROPIC_API_KEY:        ${{ secrets.ANTHROPIC_API_KEY }}

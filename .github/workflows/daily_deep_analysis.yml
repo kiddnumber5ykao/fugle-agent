@@ -1,10 +1,10 @@
-# 📅 最後更新:2026-05-29(加 symbols 輸入)
-name: 每日深度分析 (手動觸發)
+# ⬆️【要上傳 2026-06-04 19:24】daily_deep_analysis.yml — ✅ 開每週自動刷公司基本面(週日晚上)
+name: 深度分析 (每週自動 + 手動)
 
 on:
-  # 自動排程暫時關閉 — 想啟用就把下面 schedule 那段取消註解
-  # schedule:
-  #   - cron: '0 7 * * 1-5'
+  schedule:
+    # ✅ 每週日 台北 20:00(= UTC 週日 12:00)自動刷一次公司基本面(估值/配息/營收/新聞/公司簡介)
+    - cron: '0 12 * * 0'
   workflow_dispatch:
     inputs:
       scope:
