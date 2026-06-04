@@ -1,4 +1,4 @@
-# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1.2】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示
+# ⬆️【要上傳 2026-06-04 19:14】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -618,12 +618,6 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
                    "full_update", 900, "已開始重查公司基本面(背景跑)",
                    act_mode=mode, act_name="重查公司基本面")
 
-        _repo = os.getenv("GITHUB_REPO", "kiddnumber5ykao/fugle-agent")
-        st.markdown(
-            f'<a href="https://github.com/{_repo}/actions" target="_blank" '
-            f'style="display:block;text-align:center;padding:8px;border:0.5px solid '
-            f'rgba(127,127,127,.3);border-radius:8px;text-decoration:none;margin:8px 0 4px">'
-            f'📊 看更新狀況</a>', unsafe_allow_html=True)
         t1, t2 = st.columns(2)
         with t1:
             if st.button("🔁 重新整理", use_container_width=True):
