@@ -657,37 +657,31 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
             st.caption("⏳ 有更新正在跑…跑完前按鈕會鎖住")
         # 主要動作:只顯示「當前這一頁」相關的(持股↔我剛買賣股票、追蹤↔我剛加追蹤)
         if mode == "持有":
-            st.caption("加完股票交易按這個(免費)")
+            st.caption("在『股票交易』加好交易後按這個(從交易重算持股)")
             if st.button("＋ 我剛買賣股票", use_container_width=True, disabled=any_running,
-                         help="用股票交易重算持股、賺賠;只幫全新股票補公司面"):
+                         help="從『股票交易』重算持股的股數/成本;全新股票順便補公司資訊"
+                              "(花一點點 AI)。賺賠和三盞燈是即時算的,不用按。"):
                 _after(trigger_workflow("full_update.yml", inputs={"scope": "positions_new"}),
                        "full_update", 900, "已開始更新持股(背景跑)",
                        act_mode="持有", act_name="重算持股")
         else:
-            st.caption("加完追蹤按這個(免費)")
+            st.caption("在『追蹤清單』加好代號後按這個")
             if st.button("＋ 我剛加追蹤", use_container_width=True, disabled=any_running,
-                         help="只分析追蹤清單裡新加的那幾檔"):
+                         help="幫追蹤清單裡新加的那幾檔算公司資訊:體質/估值/配息/營收/新聞"
+                              "(花一點 AI)。三盞燈是即時算的,不用按。"):
                 _after(trigger_workflow("full_update.yml", inputs={"scope": "watchlist_new"}),
                        "full_update", 900, "已開始分析新追蹤(背景跑)",
                        act_mode="追蹤", act_name="分析新追蹤")
 
-        st.caption("想立刻看最新股價(免費、當場跑、幾秒~十幾秒)")
-        if st.button("⚡ 更新最新股價走勢", use_container_width=True, disabled=any_running,
-                     help="直接在這台抓最新股價、重算走勢和「該做啥」(免費,不含公司面)"):
-            # 第一段:只先標記「正在進行中」(存在「當前這一頁」的 key)+ 立刻重畫,
-            # 真正的計算放到 render 最後才跑,確保「正在進行中」先畫在這一頁的「資料時間」下
-            _t0 = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-            _mark_action(mode, "更新股價走勢")
-            st.session_state["_pending_start"] = _t0.isoformat()
-            st.session_state["_pending_mode"] = mode
-            st.rerun()
-
-        st.caption("想連公司基本面重查一遍(花一點錢,一週一次就好)")
-        if st.button("🔍 重查公司基本面", use_container_width=True, disabled=any_running,
-                     help="重查公司估值/配息/營收/法人/新聞(會花一點錢)"):
+        st.caption("更新公司資訊:體質/估值/配息/營收/新聞/簡介(會花一點 AI 錢,一週一次就夠)。"
+                   "三盞燈是即時的、不用按。")
+        if st.button("🔄 更新公司資訊(體質/估值/配息/營收/新聞)",
+                     use_container_width=True, disabled=any_running,
+                     help="重算所有持股與追蹤的公司資訊:公司體質、估值、配息、營收、新聞、公司簡介"
+                          "(會花一點 AI 錢)。三盞燈是即時算的,不受這個影響。"):
             _after(trigger_workflow("full_update.yml", inputs={"scope": "all"}),
-                   "full_update", 900, "已開始重查公司基本面(背景跑)",
-                   act_mode=mode, act_name="重查公司基本面")
+                   "full_update", 900, "已開始更新公司資訊(背景跑)",
+                   act_mode=mode, act_name="更新公司資訊")
 
         t1, t2 = st.columns(2)
         with t1:
@@ -702,21 +696,6 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
                 else:
                     st.error(f"❌ {res.get('error')}")
                 st.rerun()
-
-    # 第二段:真正執行「更新股價走勢」— 放在 render 最後,
-    # 此時這一頁「資料時間」下的『正在進行中』已經畫出來給使用者看了,才開始算。
-    # 只更新「按下去那一頁」的範圍(持有→positions、追蹤→watchlist),狀態也只寫那一頁。
-    _ps = st.session_state.pop("_pending_start", None)
-    _pm = st.session_state.pop("_pending_mode", None)
-    if _ps and _pm:
-        _scope = "positions" if _pm == "持有" else "watchlist"
-        r = _run_technical_inline(_scope)
-        if r.get("ok"):
-            _mark_action_done(_pm, ok=True)
-            st.cache_data.clear()
-        else:
-            _mark_action_done(_pm, ok=False, err=str(r.get("error", "")))
-        st.rerun()
 
 
 def _last_update_caption(rows: list[dict], mode: str = "持有") -> None:
