@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 15:16】live_forecast.py — 即時組裝 + 上市/上櫃標示
+# ⬆️【要上傳 2026-06-05 17:09】live_forecast.py — 即時組裝 + 上市/上櫃標示
 """即時組裝層 —— 打開頁面當下,把每檔的「此刻最新數字」抓齊,餵給 forecasts 引擎。
 
 分工:
@@ -148,9 +148,9 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
     if last_price is None and sig.get("ok"):
         last_price = il._f(sig.get("current_price"))
 
-    # 下一小時的方向 = 抓「剛開始要往上/往下走」:把近30分切前後半,用後半(最近約15分)
+    # 下一小時的方向 = 抓「剛開始要往上/往下走」:把近20分切前後半,用後半(最近約10分)
     # 的方向當主軸,再加一個『剛轉向』判斷。不是跟一開盤比、也不是看整段淨變化。
-    now_move, turn, accel = il.turn_and_accel(series, window_min=30)
+    now_move, turn, accel = il.turn_and_accel(series, window_min=20)
     close_strength = None
     if high is not None and low is not None and high > low and last_price is not None:
         close_strength = max(0.0, min(1.0, (last_price - low) / (high - low)))
