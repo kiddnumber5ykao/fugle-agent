@@ -1,0 +1,30 @@
+# ⬆️【要上傳 2026-06-05 10:37】daily_market.yml — 每天填一次「市場別」(上市/上櫃)回 Sheet
+name: 每日市場別 (上市/上櫃)
+
+on:
+  schedule:
+    # 每天 台北 08:30(= UTC 00:30)填一次。上市/上櫃幾乎不變,一天一次很夠。
+    - cron: '30 0 * * *'
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: '範圍 all/positions/watchlist'
+        type: string
+        required: false
+        default: all
+
+jobs:
+  market:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip }
+      - run: pip install -r requirements.txt
+      - name: 填市場別
+        env:
+          SHEETS_WRITER_URL:   ${{ secrets.SHEETS_WRITER_URL }}
+          PORTFOLIO_SHEET_URL: ${{ secrets.PORTFOLIO_SHEET_URL }}
+          FUGLE_MOCK: "0"
+        run: python scripts/run_step.py market ${{ inputs.scope || 'all' }}
