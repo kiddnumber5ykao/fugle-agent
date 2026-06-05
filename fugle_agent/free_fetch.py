@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 14:55】free_fetch.py — 免費官方資料 + 上櫃估值 + 市場別標記
+# ⬆️【要上傳 2026-06-05 15:54】free_fetch.py — 免費官方資料 + 上櫃估值 + 市場別標記
 """免費官方資料抓取 — 估值 / 月營收 / 新聞,給 _fetch_fundamentals 用。
 
 目的:把最貴的 Anthropic `web_search` 拿掉。改成:
@@ -221,9 +221,9 @@ def _build_registry() -> dict[str, dict]:
                     continue
                 sym = _clean_sym(_pick(d, "SecuritiesCompanyCode") or _pick(d, "公司代號")
                                  or _pick(d, "代號") or _pick(d, "Code"))
+                # 只取「簡稱」(短),不取全名(CompanyName 會是「…股份有限公司/…Corporation」一長串)
                 nm = str(_pick(d, "CompanyAbbreviation") or _pick(d, "公司簡稱")
-                         or _pick(d, "簡稱") or _pick(d, "CompanyName")
-                         or _pick(d, "公司名稱") or "").strip()
+                         or _pick(d, "簡稱") or "").strip()
                 if sym and sym not in out:
                     out[sym] = {"name": nm, "market": "上櫃"}
     except Exception:

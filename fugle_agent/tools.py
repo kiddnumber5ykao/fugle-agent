@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 15:25】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
+# ⬆️【要上傳 2026-06-05 15:54】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -198,7 +198,8 @@ def _lookup_stock_name(symbol: str) -> str:
             for suffix in (".TW", ".TWO"):
                 try:
                     info = _yf.Ticker(f"{symbol}{suffix}").info or {}
-                    v = info.get("longName") or info.get("shortName")
+                    # 優先 shortName(短)再 longName(全名),避免出現「…Technology Corporation」一長串
+                    v = info.get("shortName") or info.get("longName")
                     if v:
                         name = str(v).strip()
                         break
@@ -3664,10 +3665,11 @@ def fill_market_labels(scope: str = "all") -> dict:
             except Exception:
                 pass
         new_name = ""
-        if not _has_cjk(cur_name):
+        if not _has_cjk(cur_name):   # 目前是空白 或 英文 → 試著改好
             try:
-                nm = _lookup_stock_name(sym)
-                if _has_cjk(nm):
+                nm = (_lookup_stock_name(sym) or "").strip()
+                # 採用條件:查到中文、或原本空白、或查到的比現在「短」(去掉一長串全名)
+                if nm and (_has_cjk(nm) or not cur_name or len(nm) < len(cur_name)):
                     new_name = nm
             except Exception:
                 new_name = ""
