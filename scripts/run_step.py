@@ -62,7 +62,7 @@ def _new_position_symbols(time_col: str) -> list[str]:
 def main() -> None:
     step = (sys.argv[1] if len(sys.argv) > 1 else "").lower().strip()
     scope = (sys.argv[2] if len(sys.argv) > 2 else "all").lower().strip()
-    if step not in ("resync", "technical", "fundamental", "recompute", "foreign"):
+    if step not in ("resync", "technical", "fundamental", "recompute", "foreign", "market"):
         print(f"❌ 不認識的步驟: {step!r}")
         sys.exit(2)
     if scope not in ("all", "positions", "watchlist", "watchlist_new", "positions_new"):
@@ -83,7 +83,12 @@ def main() -> None:
     t0 = datetime.datetime.now()
     print(f"▶️  步驟 {step}/{scope} 開始 @ {t0.isoformat(timespec='seconds')}")
 
-    if step == "resync":
+    if step == "market":
+        # 每天一次:把上市/上櫃填回 Sheet 的「市場別」欄(輕量,不碰其他欄位)
+        from fugle_agent.tools import fill_market_labels
+        r = fill_market_labels(eff_scope)
+        print(f"   ✅ 市場別:部位 {r.get('positions')} / 追蹤 {r.get('watchlist')}")
+    elif step == "resync":
         # 依 scope 只動該動的分頁(positions 不碰追蹤清單,反之亦然)
         r = resync_and_fill_names(eff_scope)
         if not r.get("ok"):
