@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 07:57】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-05 09:12】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -420,9 +420,9 @@ def _prefetch_live_lights(symbols: tuple[str, ...]) -> dict:
     return out
 
 
-@st.cache_data(ttl=30, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def _prefetch_forecasts(items: tuple, is_holding: bool) -> dict:
-    """一整頁的三盞預測 + 怎麼辦 + 現價/損益,即時並行算好(快取 30 秒)。
+    """一整頁的三盞預測 + 怎麼辦 + 現價/損益,即時並行算好(快取 60 秒)。
     items = ((代號, 股數, 總成本), ...)。任何失敗都回空 dict,不讓整頁壞。"""
     try:
         from fugle_agent import live_forecast
@@ -463,10 +463,10 @@ def _fc_label(action: str) -> tuple[str, str]:
     return ("⚪", a.split("、")[0][:8])
 
 
-@st.cache_data(ttl=25, show_spinner=False)
+@st.cache_data(ttl=55, show_spinner=False)
 def _market_ctx_cached() -> dict:
-    """大盤順逆風。快取 25 秒(< 橫幅自動刷新的 30 秒),
-    讓每次自動刷新都拿到新的即時指數,又能讓同一秒的多次互動共用、不重打。"""
+    """大盤順逆風。快取 55 秒(< 橫幅自動刷新的 60 秒),
+    讓每次自動刷新都拿到新的即時指數,又能讓同一分鐘的多次互動共用、不重打。"""
     try:
         from fugle_agent import market_context
         return market_context.get_market_context()
@@ -475,7 +475,7 @@ def _market_ctx_cached() -> dict:
                 "reason": "大盤資料抓不到,當作普通", "updated": ""}
 
 
-@st.cache_data(ttl=25, show_spinner=False)
+@st.cache_data(ttl=55, show_spinner=False)
 def _us_market_cached() -> dict:
     """美股三大指數(yfinance,延遲約 15 分)。回 {items, date, light}。
     light 算法跟大盤盤前一樣:三指數平均 ≥+0.5%→偏強、≤-0.5%→偏弱、其餘普通。"""
@@ -548,7 +548,7 @@ def _render_market_banner() -> bool:
     return head
 
 
-@st.fragment(run_every="30s")
+@st.fragment(run_every="60s")
 def _market_banner_fragment() -> None:
     """只讓『大盤橫幅』這一塊每 30 秒自己重算重畫,其他區塊不跟著重跑
     (避免整頁刷新造成 lag)。順便把逆風狀態寫進 session_state 給買進煞車用。"""
@@ -569,10 +569,10 @@ def _render_forecast_freshness() -> None:
     us_t = us.get("time") or us.get("date") or ""            # 美股(延遲約15分,到分)
 
     nh = f"即時 {now_t}" if now_t else "即時(到秒)"
-    tm = (f"今天 {now_t}　＋ 美股 {us_t}(延遲約15分)" if (now_t or us_t)
-          else "今天收盤 ＋ 隔夜美股(延遲約15分)")
-    td = (f"日線 {daily_t}　＋ 外資 {daily_t}(每日,當日收盤結算)" if cd
-          else "日線昨收 ＋ 外資(每日)")
+    tm = (f"今天 {now_t}　＋ 美股 {us_t}" if (now_t or us_t)
+          else "今天收盤 ＋ 隔夜美股")
+    td = (f"日線 {daily_t}　＋ 外資 {daily_t}" if cd
+          else "日線昨收 ＋ 外資")
     rows = [
         ("🔮", "下一小時", nh),
         ("🌤️", "明天", tm),
@@ -728,7 +728,7 @@ def _last_update_caption(rows: list[dict], mode: str = "持有") -> None:
         'border-radius:10px;padding:8px 12px;margin-bottom:10px;font-size:13px">'
         f'🏢 <b>公司資料：</b>{ft}{warn}　'
         '<span style="color:#5F5E5A;font-size:12px">'
-        '(估值/配息/營收/新聞/簡介,每週日自動刷;三盞預測為即時算)</span></div>',
+        '(估值/配息/營收/新聞/簡介,每週日自動刷)</span></div>',
         unsafe_allow_html=True)
     # 按鈕進度(每一頁各自獨立,跑完/重整都不丟)
     _render_tab_status(mode)
