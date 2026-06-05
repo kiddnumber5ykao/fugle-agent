@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 10:11】forecasts.py — 下一小時改「抓剛轉向」(近15分走勢+剛翻向)
+# ⬆️【要上傳 2026-06-05 10:30】forecasts.py — 下一小時改「抓剛轉向」(近15分走勢+剛翻向)
 """三盞預測:下一小時 / 明天 / 三天後 —— 用「同一份此刻最新快照」算。
 
 設計原則:
@@ -205,15 +205,18 @@ def combined_action(nh: dict, tm: dict, td: dict, *,
     near_supports_up = (near > 0) or (tm_dir > 0)
 
     if is_holding:
-        if far >= 2:
-            base = "🟢 抱著" + ("、可考慮加碼" if far >= 3 else "")
-            if near < 0:
-                base = "🟢 抱著、別追加(此刻在殺、等它穩)"
-            return _brake_buy(base, headwind) if "加碼" in base else base
         if far <= -2:
             if near > 0:
                 return "🔴 想減/出、可等這波衝高一點再出"
             return "🔴 考慮減碼或出場"
+        if far >= 2:
+            if near < 0:
+                return "🟢 抱著、別追加(此刻在殺、等它穩)"
+            if far >= 3:
+                return _brake_buy("🟢 抱著、可考慮加碼", headwind)
+            if near > 0:
+                return "🟢 抱著、走勢有撐"          # 三天後偏多 + 下一小時也偏上
+            return "🟡 抱著、續抱觀察(近期方向還不明)"  # 只有三天後偏多、近期說不準
         return "🟡 抱著觀察、訊號還不明"
 
     # 追蹤(找進場)
