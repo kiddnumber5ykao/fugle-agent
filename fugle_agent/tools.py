@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 23:02】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
+# ⬆️【要上傳 2026-06-05 23:22】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -2986,8 +2986,8 @@ def _super_short_term_light(signals: dict) -> str:
 # 避免一次性吃光 Anthropic Tier 1 的 RPM / TPM 配額(50K input tokens/min)
 # 在並行模式下這個 gap 變成「兩個 thread 之間的最小間隔」,實際整體節奏由
 # ThreadPoolExecutor(max_workers) 控制。
-_FETCH_FUNDAMENTALS_GAP_SEC = 3   # 兩次呼叫間最小間隔(秒)
-_FETCH_PARALLEL_WORKERS = 2        # Tier 2 token 夠用 → 2 檔並行(撞 429 仍會耐心重試)
+_FETCH_FUNDAMENTALS_GAP_SEC = 1   # 兩次呼叫間最小間隔(秒)— 放寬加速(3→1);撞 429 仍會重試
+_FETCH_PARALLEL_WORKERS = 4        # 並行數 2→4(Haiku 額度遠夠用,加速公司面這步)
 _last_fundamentals_call_ts: float = 0.0
 _fundamentals_session_cache: dict[str, dict] = {}   # sym → result,跨 organize 共用
 
@@ -3678,45 +3678,51 @@ def fill_market_labels(scope: str = "all", light: bool = False) -> dict:
                 new_name = ""
         return m, new_name
 
+    def _payloads(rows: list, sym_keys: tuple) -> list[dict]:
+        """並行算每檔的 (市場別, 中文名) → 組成要寫回的 payload 清單(慢的 _fix 並行跑)。"""
+        from concurrent.futures import ThreadPoolExecutor
+        items = []
+        for r in rows:
+            if not isinstance(r, dict) or r.get("_error"):
+                continue
+            sym = str(next((r.get(k) for k in sym_keys if r.get(k)), "") or "").strip()
+            if not sym:
+                continue
+            cur = str(r.get("name") or r.get("名稱") or "").strip()
+            items.append((sym, cur))
+        if not items:
+            return []
+        with ThreadPoolExecutor(max_workers=min(6, len(items))) as ex:
+            fixes = list(ex.map(lambda t: _fix(t[0], t[1]), items))
+        out = []
+        for (sym, _cur), (m, nm) in zip(items, fixes):
+            payload: dict = {"symbol": sym, "代號": sym}
+            if m:
+                payload["市場別"] = m
+            if nm:
+                payload["name"] = nm
+                payload["名稱"] = nm
+            if len(payload) > 2:
+                out.append(payload)
+        return out
+
     if do_wl:
         try:
-            for w in (sheets.load_watchlist() or []):
-                if w.get("_error"):
-                    continue
-                sym = str(w.get("symbol") or w.get("代號") or "").strip()
-                if not sym:
-                    continue
-                cur = str(w.get("name") or w.get("名稱") or "").strip()
-                m, nm = _fix(sym, cur)
-                payload: dict = {"symbol": sym, "代號": sym}
-                if m:
-                    payload["市場別"] = m
-                if nm:
-                    payload["name"] = nm
-                    payload["名稱"] = nm
-                if len(payload) > 2 and sheets_writer.upsert_watchlist_item(**payload).get("ok"):
-                    n_wl += 1
+            wtab = os.getenv(sheets.WATCHLIST_TAB_ENV, sheets.DEFAULT_WATCHLIST_TAB)
+            pl = _payloads(sheets.load_watchlist() or [], ("symbol", "代號"))
+            if pl:
+                ok = _bulk_or_parallel(wtab, pl, sheets_writer.upsert_watchlist_item)
+                n_wl = sum(1 for v in ok.values() if v)
         except Exception as e:
             print(f"⚠️ 追蹤清單名字/市場別失敗: {e}", flush=True)
 
     if do_pos:
         try:
-            for p in (sheets.load_positions() or []):
-                if p.get("_error"):
-                    continue
-                sym = str(p.get("symbol") or "").strip()
-                if not sym:
-                    continue
-                cur = str(p.get("name") or "").strip()
-                m, nm = _fix(sym, cur)
-                payload = {"symbol": sym, "代號": sym}
-                if m:
-                    payload["市場別"] = m
-                if nm:
-                    payload["name"] = nm
-                    payload["名稱"] = nm
-                if len(payload) > 2 and sheets_writer.upsert_position(**payload).get("ok"):
-                    n_pos += 1
+            ptab = os.getenv(sheets.POSITIONS_TAB_ENV, sheets.DEFAULT_POSITIONS_TAB)
+            pl = _payloads(sheets.load_positions() or [], ("symbol", "代號"))
+            if pl:
+                ok = _bulk_or_parallel(ptab, pl, sheets_writer.upsert_position)
+                n_pos = sum(1 for v in ok.values() if v)
         except Exception as e:
             print(f"⚠️ 部位名字/市場別失敗: {e}", flush=True)
 
