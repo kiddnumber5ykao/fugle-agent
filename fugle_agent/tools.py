@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 00:40】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
+# ⬆️【要上傳 2026-06-05 10:23】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -122,6 +122,21 @@ def _envelope(data: Any) -> dict:
 _NAME_CACHE: dict[str, str] = {}  # 同 session 同個 symbol 只查一次
 
 
+def _has_cjk(s: Any) -> bool:
+    """字串裡有沒有中文字。"""
+    return any('一' <= ch <= '鿿' for ch in str(s or ""))
+
+
+def _pick_zh(*cands: Any) -> str:
+    """從多個候選名字裡,優先回『含中文字』的;沒有中文就回第一個非空;都沒有回 ''。
+    (代號是你給的,名字由系統補 → 一律盡量補中文,真的只有英文才用英文。)"""
+    vals = [str(c).strip() for c in cands if c and str(c).strip()]
+    for v in vals:
+        if _has_cjk(v):
+            return v
+    return vals[0] if vals else ""
+
+
 def _lookup_stock_name(symbol: str) -> str:
     """查股票名稱,多層 fallback:內建熱門表 → Fugle tickers → Fugle quote(重試) → yfinance。
     重要:查不到就**不寫快取**,這樣同一檔之後還會再重試(避免一次失敗就永遠空白)。
@@ -148,18 +163,19 @@ def _lookup_stock_name(symbol: str) -> str:
     except Exception:
         pass
 
-    # 2) Fugle quote 通常會帶 name 欄位 — 撞到 429 / 暫時失敗就重試最多 3 次
-    if not name:
+    # 2) 若還沒拿到「中文」名字,從 Fugle quote 找(name 欄常是英文 → 優先挑有中文的)
+    #    撞到 429 / 暫時失敗就重試最多 3 次
+    if not _has_cjk(name):
         for attempt in range(3):
             try:
                 q = _client.quote(symbol)
                 if isinstance(q, dict):
-                    for key in ("name", "nameZhTw", "Name", "shortName"):
-                        v = q.get(key)
-                        if v:
-                            name = str(v).strip()
-                            break
-                if name:
+                    zh = _pick_zh(q.get("nameZhTw"), q.get("name"),
+                                  q.get("Name"), q.get("shortName"))
+                    # 有中文就採用;沒有中文但原本是空的,才暫用英文(不覆蓋已有的英文)
+                    if _has_cjk(zh) or not name:
+                        name = zh or name
+                if _has_cjk(name):
                     break
             except Exception:
                 pass
@@ -1129,12 +1145,17 @@ async def backfill_position_names(args: dict) -> dict:
     for p in positions:
         sym = p.get("symbol", "")
         cur_name = (p.get("name") or "").strip()
-        if cur_name and not force:
-            results.append({"symbol": sym, "name": cur_name, "skipped": "已有 name"})
+        # 已經是中文名字 → 保留(除非 force)。空白 或 英文 → 往下重查。
+        if cur_name and _has_cjk(cur_name) and not force:
+            results.append({"symbol": sym, "name": cur_name, "skipped": "已有中文 name"})
             continue
         new_name = _lookup_stock_name(sym)
         if not new_name:
-            results.append({"symbol": sym, "skipped": "內建表查不到"})
+            results.append({"symbol": sym, "skipped": "查不到名字"})
+            continue
+        # 原本已有名字(英文)時:只有查到「中文」才覆蓋,免得英文換英文、或把名字洗掉
+        if cur_name and not _has_cjk(new_name):
+            results.append({"symbol": sym, "name": cur_name, "skipped": "查不到中文名、保留原樣"})
             continue
         upd = sheets_writer.upsert_position(symbol=sym, name=new_name)
         if upd.get("ok"):

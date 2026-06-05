@@ -1,3 +1,4 @@
+# ⬆️【要上傳 2026-06-05 10:23】symbol_lookup.py — 補名字優先中文(nameZhTw)
 """Taiwan stock name → ticker lookup.
 
 兩層策略:
@@ -196,7 +197,8 @@ def _fugle_search(query: str, fugle_client) -> list[dict]:
     out: list[dict] = []
     for r in records:
         sym = str(r.get("symbol") or r.get("code") or "").strip()
-        name = str(r.get("name") or r.get("nameZhTw") or "").strip()
+        # 優先中文名(nameZhTw),Fugle 的 name 欄常是英文
+        name = str(r.get("nameZhTw") or r.get("name") or "").strip()
         if not sym or not name:
             continue
         if q in _norm(name) or q in _norm(sym):
