@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 13:25】daily_market.yml — 每天:名字中文化 + 市場別(上市/上櫃)
+# ⬆️【要上傳 2026-06-05 15:25】daily_market.yml — 每天:名字中文化 + 市場別(補上 Fugle 金鑰)
 name: 每日 名字中文化 + 市場別
 
 on:
@@ -22,9 +22,10 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: '3.11', cache: pip }
       - run: pip install -r requirements.txt
-      - name: 填市場別
+      - name: 名字中文化 + 市場別
         env:
-          SHEETS_WRITER_URL:   ${{ secrets.SHEETS_WRITER_URL }}
-          PORTFOLIO_SHEET_URL: ${{ secrets.PORTFOLIO_SHEET_URL }}
+          SHEETS_WRITER_URL:        ${{ secrets.SHEETS_WRITER_URL }}
+          PORTFOLIO_SHEET_URL:      ${{ secrets.PORTFOLIO_SHEET_URL }}
+          FUGLE_MARKETDATA_API_KEY: ${{ secrets.FUGLE_MARKETDATA_API_KEY }}
           FUGLE_MOCK: "0"
         run: python scripts/run_step.py market ${{ inputs.scope || 'all' }}
