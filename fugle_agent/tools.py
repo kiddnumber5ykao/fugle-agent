@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 15:54】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
+# ⬆️【要上傳 2026-06-05 23:02】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -2517,7 +2517,9 @@ def _compute_short_signals(sym: str, quote: dict | None = None) -> dict:
     日線部分有 5 分鐘快取(_fetch_daily_candles_cached),即時報價仍每次抓新的。"""
     try:
         to_dt = datetime.now()
-        from_dt = to_dt - timedelta(days=400)
+        # 只需最長 20 天的指標(均線/RSI/量比),90 天日曆日(約60交易日)綽綽有餘 →
+        # 下載量比原本 400 天少約 8 成,冷啟動更快(指標完全不受影響)。
+        from_dt = to_dt - timedelta(days=90)
         data = _fetch_daily_candles_cached(
             sym, from_dt.strftime("%Y-%m-%d"), to_dt.strftime("%Y-%m-%d"))
         if data is None:
@@ -3633,12 +3635,13 @@ def _position_advice(row: dict) -> str:
     return f"全部賣掉[明顯轉弱又在虧{extra},別凹,停損出場]"
 
 
-def fill_market_labels(scope: str = "all") -> dict:
+def fill_market_labels(scope: str = "all", light: bool = False) -> dict:
     """一次把 Sheet 的『市場別』(上市/上櫃)+ 『名字中文化』都弄好。
       - 市場別:free_fetch.get_market(官方證交所 BWIBBU + 櫃買清單)。
       - 名字:只改「空白 或 非中文(英文)」的 → 用官方中文簡稱(_lookup_stock_name);
               你已經打中文的名字不動。
-    上市/上櫃幾乎不變、名字也不太變 → 一天跑一次就好(由 daily_market.yml 排程,也可手動跑)。
+    light=True(給 resync 順手呼叫用):只查官方表的市場別、不每檔再連 Fugle、也不重查名字,
+      → 很快,不會拖垮 resync 那步;完整版(含 Fugle 備援 + 名字中文化)交給 daily_market 排程。
     需求:Sheet 的「股票部位」「追蹤清單」分頁要先各有一個表頭叫『市場別』的欄,
           沒有的話 Apps Script 會略過不寫(不會報錯)。"""
     do_pos = scope in ("all", "positions")
@@ -3651,8 +3654,8 @@ def fill_market_labels(scope: str = "all") -> dict:
             m = free_fetch.get_market(sym) or ""
         except Exception:
             m = ""
-        # 官方清單沒收(冷門上櫃)→ 用 Fugle 報價的市場欄補判
-        if not m:
+        # 官方清單沒收(冷門上櫃)→ 用 Fugle 報價的市場欄補判(light 模式跳過,保持快)
+        if not m and not light:
             try:
                 q = _client.quote(sym) or {}
                 mm = str(q.get("market") or q.get("exchange") or "").upper().strip()
@@ -3665,7 +3668,7 @@ def fill_market_labels(scope: str = "all") -> dict:
             except Exception:
                 pass
         new_name = ""
-        if not _has_cjk(cur_name):   # 目前是空白 或 英文 → 試著改好
+        if not light and not _has_cjk(cur_name):   # 目前是空白 或 英文 → 試著改好(light 模式跳過)
             try:
                 nm = (_lookup_stock_name(sym) or "").strip()
                 # 採用條件:查到中文、或原本空白、或查到的比現在「短」(去掉一長串全名)
