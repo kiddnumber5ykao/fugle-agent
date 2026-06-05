@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 17:09】live_forecast.py — 即時組裝 + 上市/上櫃標示
+# ⬆️【要上傳 2026-06-05 17:16】live_forecast.py — 即時組裝 + 上市/上櫃標示
 """即時組裝層 —— 打開頁面當下,把每檔的「此刻最新數字」抓齊,餵給 forecasts 引擎。
 
 分工:
@@ -115,10 +115,10 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
     msnap = msnap or {}
     sym = str(sym).strip()
 
-    # 1) 即時報價 + 盤中分鐘K + 逐筆(先抓報價,等下日線訊號共用同一份 → 省一次報價)
+    # 1) 即時報價 + 盤中分鐘K(先抓報價,等下日線訊號共用同一份 → 省一次報價)
+    #    ※ 為了加速,拿掉「逐筆」那一趟(原本只用來算買賣力道);下一小時改靠走勢/轉向/量/大盤。
     quote: dict = {}
     candles: dict = {}
-    ticks: dict = {}
     last_price = high = low = None
     series: list = []
     try:
@@ -131,9 +131,6 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
         low = il._f(quote.get("lowPrice")) or il._f(quote.get("low"))
         candles = c.intraday_candles(sym) or {}
         series = il.series_from_candles(candles)
-        ticks = c.intraday_ticks(sym, limit=200) or {}
-        if len(series) < 2:
-            series = il.series_from_ticks(ticks)
     except Exception:
         series = []
 
@@ -160,9 +157,9 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
 
     snap = {
         # 🔮 下一小時
-        "now_move_pct": now_move,       # 後半(最近約15分)漲跌% = 現在往哪走
+        "now_move_pct": now_move,       # 後半(最近約10分)漲跌% = 現在往哪走
         "turn":         turn,           # 剛轉向:+1剛翻上 / -1剛翻下 / 0
-        "pressure":     il.pressure_from_ticks(ticks),
+        "pressure":     None,           # 已拿掉逐筆抓取(加速)→ 買賣力道這票不投
         "vol_ratio":    _sg("today_vol_ratio"),
         "accel":        accel,
         "mkt_now":      msnap.get("mkt_today"),
