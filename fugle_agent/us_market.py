@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 12:04】us_market.py — 加美股最新資料時間(到分,台北)
+# ⬆️【要上傳 2026-06-05 12:19】us_market.py — 加美股最新資料時間(到分,台北)
 """US / global stock data + per-ticker news via yfinance.
 
 Covers:
@@ -136,8 +136,9 @@ def news(symbol: str, limit: int = 10) -> list[dict]:
 
 
 def latest_index_time() -> str:
-    """美股最近一筆「分鐘」資料的時間 → 轉台北 YYYY-MM-DD HH:MM。失敗回 ""。
-    (yfinance 分鐘資料延遲約 15 分,所以這是延遲後的資料時間,但比只到「日」精準。)"""
+    """美股最近一筆「分鐘」資料的時間 → 轉台北 YYYY-MM-DD HH:MM:SS。失敗回 ""。
+    (yfinance 分鐘資料延遲約 15 分,且只有分鐘精度 → 秒一律 :00。這是「最後一筆美股資料」
+     的台灣時間;美股一場收盤約落在台灣凌晨,所以收盤後看到的會是清晨那一刻。)"""
     if yf is None:
         return ""
     try:
@@ -149,6 +150,6 @@ def latest_index_time() -> str:
             ts = ts.tz_convert("Asia/Taipei")
         except Exception:
             pass
-        return ts.strftime("%Y-%m-%d %H:%M")
+        return ts.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return ""
