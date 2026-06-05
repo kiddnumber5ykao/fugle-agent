@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 12:19】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-05 17:35】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -592,6 +592,87 @@ def _render_forecast_freshness() -> None:
     st.markdown(html, unsafe_allow_html=True)
 
 
+# ───────────────────────── 🔍 查任何一檔 ─────────────────────────
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _search_forecast(sym: str) -> dict:
+    """單檔即時三盞預測 + 怎麼辦 + 現價/市場別(非持股,沒有損益)。快取 60 秒。"""
+    try:
+        from fugle_agent import live_forecast
+        return live_forecast.forecast_for(sym, is_holding=False)
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _search_name(sym: str) -> str:
+    try:
+        from fugle_agent.tools import _lookup_stock_name
+        return _lookup_stock_name(sym) or sym
+    except Exception:
+        return sym
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _search_fundamentals(sym: str, name: str) -> dict:
+    """查一檔的公司面(體質/簡介/估值/配息/營收/新聞)。會花一點點 AI → 快取 1 小時。"""
+    try:
+        from fugle_agent import tools
+        fd = tools._fetch_fundamentals(sym, name)
+        if not fd.get("ok"):
+            return {}
+        return {
+            "公司體質": tools._company_health(fd, sym),
+            "公司簡介": fd.get("about", ""),
+            "估值":     fd.get("estimate", ""),
+            "配息":     fd.get("dividend", ""),
+            "營收動能": fd.get("revenue", ""),
+            "新聞":     fd.get("news", ""),
+        }
+    except Exception:
+        return {}
+
+
+def _render_search() -> None:
+    """頁面上方的「查任何一檔」:輸入代號 → 跟卡片一樣的三盞預測 + 怎麼辦 + 公司面。"""
+    has_q = bool(st.session_state.get("_search_code"))
+    with st.expander("🔍 查任何一檔(輸入代號)", expanded=has_q):
+        with st.form("search_form", clear_on_submit=False):
+            code_in = st.text_input("股票代號(例如 2330、6274)",
+                                    value=st.session_state.get("_search_code", ""),
+                                    label_visibility="collapsed",
+                                    placeholder="輸入股票代號,例如 2330")
+            c1, c2 = st.columns([3, 1])
+            go = c1.form_submit_button("查詢", use_container_width=True)
+            clear = c2.form_submit_button("清除", use_container_width=True)
+        if clear:
+            st.session_state["_search_code"] = ""
+            return
+        if go:
+            st.session_state["_search_code"] = (code_in or "").strip().lstrip("'")
+        code = st.session_state.get("_search_code", "")
+        if not code:
+            return
+
+        with st.spinner(f"查 {code} 中…(第一次查公司面會花幾秒)"):
+            fc = _search_forecast(code)
+            name = _search_name(code)
+            fund = _search_fundamentals(code, name)
+
+        if not fc.get("ok"):
+            st.info(f"查不到 {code} 的即時資料,確認一下代號對不對?(美股/興櫃可能查不到)")
+            return
+
+        # 注入 forecast 讓 _detail_common 的 _fc_get 找得到
+        st.session_state.setdefault("_forecasts", {})[code] = fc
+        mkt = _g(fund, "市場別") or fc.get("market") or ""
+        dot = {"上市": "🔵", "上櫃": "🟠", "興櫃": "⚪"}.get(mkt, "")
+        st.markdown(f"#### {(dot + ' ') if dot else ''}{code} {name}")
+        # 組一個 row 給 _detail_common(公司面塞進去,沒有持股 → 不顯示損益)
+        r = {"代號": code, "symbol": code, "名稱": name, "市場別": mkt, **fund}
+        _detail_common(r, fc.get("action", ""))
+
+
 def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
            workflow_running=None, cleanup_watchlist=None) -> None:
     st.markdown("""<style>
@@ -623,6 +704,9 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
     if "_mkt_headwind" not in st.session_state:
         st.session_state["_mkt_headwind"] = False
     _market_banner_fragment()
+
+    # ── 🔍 查任何一檔(輸入代號就看三盞預測 + 公司面,不必先加進清單)──
+    _render_search()
 
 
     # 跑中狀態(鎖按鈕用)— 每頁各自獨立:持股看 positions 系列、追蹤看 watchlist 系列。
