@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 07:54】market_context.py — 大盤永遠講台股加權(拿掉盤前改講美股)
+# ⬆️【要上傳 2026-06-05 11:42】market_context.py — 大盤永遠講台股加權(拿掉盤前改講美股)
 """大盤順逆風 — 全頁共用背景,不分個股,不存 Sheet(當下算當下用)。
 
 時間邏輯:
@@ -165,6 +165,10 @@ def _twii_signals() -> dict | None:
     if has_live:
         # 盤中:今天即時價 vs 昨收(最後一根「已完成日」),10 日線只用已完成日。
         last, date_used, data_time = live, today_str, live_time
+        if not data_time:
+            # 有今天的即時指數、但這筆沒帶秒級時間戳(指數報價常這樣)→ 用此刻台北時間到秒
+            # (它就是「現在」抓的)。保證橫幅一律有年月日時分秒。
+            data_time = _now_tw().strftime("%Y-%m-%d %H:%M:%S")
         prev_close, completed_date = None, ""
         for c, d in zip(reversed(closes), reversed(dates)):
             if d and d < today_str:
