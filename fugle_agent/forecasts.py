@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 10:04】forecasts.py — 下一小時改「抓剛轉向」(近15分走勢+剛翻向)
+# ⬆️【要上傳 2026-06-05 10:11】forecasts.py — 下一小時改「抓剛轉向」(近15分走勢+剛翻向)
 """三盞預測:下一小時 / 明天 / 三天後 —— 用「同一份此刻最新快照」算。
 
 設計原則:
@@ -196,9 +196,13 @@ def _as_vote(v: Any) -> Optional[int]:
 def combined_action(nh: dict, tm: dict, td: dict, *,
                     is_holding: bool, headwind: bool = False) -> str:
     """nh/tm/td 是三盞預測結果(含 dir: 1/0/-1)。回一句白話「怎麼辦」。"""
-    near = int(nh.get("dir", 0))
+    near = int(nh.get("dir", 0))      # 下一小時
+    tm_dir = int(tm.get("dir", 0))    # 明天
+    td_dir = int(td.get("dir", 0))    # 三天後
     # 遠的方向:三天後權重 2、明天權重 1
-    far = int(td.get("dir", 0)) * 2 + int(tm.get("dir", 0))
+    far = td_dir * 2 + tm_dir
+    # 近期是否「至少有一盞站出來偏多」(下一小時 或 明天)。兩盞都沒表態 → 近期還不明朗。
+    near_supports_up = (near > 0) or (tm_dir > 0)
 
     if is_holding:
         if far >= 2:
@@ -216,6 +220,9 @@ def combined_action(nh: dict, tm: dict, td: dict, *,
     if far >= 2:
         if near < 0:
             return "🟡 想進、等它止穩再進(此刻在殺)"
+        # 只有最遠那盞偏多、近兩盞(下一小時/明天)都還沒表態 → 別急著進
+        if not near_supports_up:
+            return "🟡 方向偏多,但近期(下一小時/明天)還沒表態、再等等"
         return _brake_buy("🟢 可考慮進場" + ("(偏積極)" if far >= 3 else ""), headwind)
     if far <= -2:
         return "🔴 先別進、方向偏空"
@@ -223,9 +230,12 @@ def combined_action(nh: dict, tm: dict, td: dict, *,
 
 
 def _brake_buy(text: str, headwind: bool) -> str:
-    if headwind:
-        return text + "　🌡️ 但大盤逆風,想買的話等大盤穩一點再進"
-    return text
+    """大盤逆風時對「買進類」動作踩煞車。進場直接降級成『等大盤穩再進』,加碼則加一句提醒。"""
+    if not headwind:
+        return text
+    if "進場" in text:
+        return "🟡 想進、但大盤逆風,等大盤穩一點再進"
+    return text + "　🌡️ 但大盤逆風,想買的話等大盤穩一點再進"
 
 
 def all_three(snapshot: dict, *, is_holding: bool, headwind: bool = False) -> dict:
