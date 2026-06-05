@@ -1,4 +1,4 @@
-# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1】intraday_lights.py — 盤中微結構 helper
+# ⬆️【要上傳 2026-06-05 10:04】intraday_lights.py — 盤中微結構 + 剛轉向偵測(turn_and_accel)
 """盤中即時燈號 — 純計算核心。
 
 三盞燈的分工(從最即時 → 最穩):
@@ -287,6 +287,48 @@ def now_move_and_accel(series: list[tuple[float, float]] | None,
         else:
             accel = 0
     return (move, accel)
+
+
+def turn_and_accel(series: list[tuple[float, float]] | None,
+                   window_min: int = 30) -> tuple[Optional[float], Optional[int], Optional[int]]:
+    """抓『剛開始要往上/往下走』。把近 window_min 分鐘切成「前半 / 後半」:
+      - 後半漲跌%(最近約一半時間,例如近15分)→ 當「現在往哪走」的主方向,
+        比『整段淨變化』更早抓到轉向。
+      - turn:後半往上、前半沒往上 → +1(剛翻上);後半往下、前半沒往下 → -1(剛翻下);否則 0。
+      - accel:後半幅度明顯大於前半且同向 → +1(越走越快);明顯變小 → -1(鈍化);否則 0。
+    回 (後半漲跌%, turn, accel)。資料不足回 (None, None, None)。"""
+    if not series:
+        return (None, None, None)
+    pts = sorted([(t, p) for t, p in series if t is not None and p is not None],
+                 key=lambda x: x[0])
+    if len(pts) < 3:
+        return (None, None, None)
+    last_t = pts[-1][0]
+    cutoff = last_t - window_min * 60
+    window = [(t, p) for t, p in pts if t >= cutoff]
+    if len(window) < 3:
+        window = pts[-3:]
+    mid = len(window) // 2
+    first_p, mid_p, last_p = window[0][1], window[mid][1], window[-1][1]
+    recent = (last_p / mid_p - 1) * 100 if mid_p else None     # 後半:現在往哪走
+    prior = (mid_p / first_p - 1) * 100 if first_p else None   # 前半
+    eps = 0.05
+    turn = 0
+    if recent is not None and prior is not None:
+        if recent > eps and prior <= eps:
+            turn = 1
+        elif recent < -eps and prior >= -eps:
+            turn = -1
+    accel = None
+    if recent is not None and prior is not None:
+        same_dir = (recent >= 0) == (prior >= 0)
+        if abs(recent) > abs(prior) * 1.15 and same_dir:
+            accel = 1
+        elif abs(recent) < abs(prior) * 0.6:
+            accel = -1
+        else:
+            accel = 0
+    return (recent, turn, accel)
 
 
 def _to_epoch_sec(v: Any) -> Optional[float]:

@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 00:50】live_forecast.py — 即時組裝 + 上市/上櫃標示
+# ⬆️【要上傳 2026-06-05 10:04】live_forecast.py — 即時組裝 + 上市/上櫃標示
 """即時組裝層 —— 打開頁面當下,把每檔的「此刻最新數字」抓齊,餵給 forecasts 引擎。
 
 分工:
@@ -147,7 +147,9 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
     if last_price is None and sig.get("ok"):
         last_price = il._f(sig.get("current_price"))
 
-    now_move, accel = il.now_move_and_accel(series)
+    # 下一小時的方向 = 抓「剛開始要往上/往下走」:把近30分切前後半,用後半(最近約15分)
+    # 的方向當主軸,再加一個『剛轉向』判斷。不是跟一開盤比、也不是看整段淨變化。
+    now_move, turn, accel = il.turn_and_accel(series, window_min=30)
     close_strength = None
     if high is not None and low is not None and high > low and last_price is not None:
         close_strength = max(0.0, min(1.0, (last_price - low) / (high - low)))
@@ -157,9 +159,9 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
 
     snap = {
         # 🔮 下一小時
-        "now_move_pct": now_move,
+        "now_move_pct": now_move,       # 後半(最近約15分)漲跌% = 現在往哪走
+        "turn":         turn,           # 剛轉向:+1剛翻上 / -1剛翻下 / 0
         "pressure":     il.pressure_from_ticks(ticks),
-        "vwap_pct":     il.vwap_pct_from_candles(candles, last_price),
         "vol_ratio":    _sg("today_vol_ratio"),
         "accel":        accel,
         "mkt_now":      msnap.get("mkt_today"),

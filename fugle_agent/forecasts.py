@@ -1,4 +1,4 @@
-# ✅【本次上傳批次：2026-06-04 三盞預測燈版 v1】forecasts.py — 三盞預測引擎 + 怎麼辦
+# ⬆️【要上傳 2026-06-05 10:04】forecasts.py — 下一小時改「抓剛轉向」(近15分走勢+剛翻向)
 """三盞預測:下一小時 / 明天 / 三天後 —— 用「同一份此刻最新快照」算。
 
 設計原則:
@@ -18,8 +18,8 @@ from __future__ import annotations
 from typing import Any, Optional
 
 # ───────────── 可調門檻 ─────────────
-NH_MOVE_UP = 0.30     # 下一小時:近 15-30 分漲跌% 門檻
-NH_MOVE_DN = -0.30
+NH_MOVE_UP = 0.20     # 下一小時:最近約15分(後半)漲跌% 門檻
+NH_MOVE_DN = -0.20
 NH_VWAP_UP = 0.05     # 站上/跌破 VWAP 的%門檻(避免貼著線時亂投)
 NH_VWAP_DN = -0.05
 VOL_BIG = 1.2         # 放量門檻(近量 vs 平常量)
@@ -90,21 +90,25 @@ def _tally(votes: list[tuple[Optional[int], str, str]]) -> dict:
 # ===========================================================================
 
 def next_hour(s: dict) -> dict:
-    mv = _num(s.get("now_move_pct"))
+    mv = _num(s.get("now_move_pct"))       # 後半(最近約15分)漲跌% = 現在往哪走
     vr = _num(s.get("vol_ratio"))
     move_vote = _vote_threshold(mv, NH_MOVE_UP, NH_MOVE_DN)
-    vwap_vote = _vote_threshold(_num(s.get("vwap_pct")), NH_VWAP_UP, NH_VWAP_DN)
+    turn_vote = _as_vote(s.get("turn"))    # 剛轉向(+1剛翻上 / -1剛翻下)
     # 量只在「有方向時」才強化:放量 + 在漲 → +1;放量 + 在跌 → -1
     vol_vote = None
     if vr is not None and vr >= VOL_BIG and move_vote:
         vol_vote = 1 if move_vote > 0 else -1
+    # 方向 = 抓「剛開始要往上/往下走」:用最近約15分的走勢(move,雙票主導)+『剛轉向』,
+    # 配買賣力道、量、加速、大盤。不看「站上/跌破均價線」(那是跟整天平均比、接近跟開盤比,
+    # 會把方向往整天漲跌拉,不符合『剛轉向』的意思)。
     votes = [
-        (move_vote,                     "近期在拉",   "近期在殺"),
-        (_as_vote(s.get("pressure")),   "買盤較多",   "賣壓較重"),
-        (vwap_vote,                     "站上均價線", "跌破均價線"),
-        (vol_vote,                      "有量挺",     "量挺著跌"),
-        (_as_vote(s.get("accel")),      "越拉越快",   "漲勢鈍化"),
-        (_as_vote(s.get("mkt_now")),    "大盤順風",   "大盤逆風"),
+        (move_vote,                     "最近在往上走",   "最近在往下走"),
+        (move_vote,                     "最近在往上走",   "最近在往下走"),   # 走勢雙票,主導方向
+        (turn_vote,                     "剛開始往上翻",   "剛開始往下翻"),
+        (_as_vote(s.get("pressure")),   "買盤較多",       "賣壓較重"),
+        (vol_vote,                      "有量挺",         "量挺著跌"),
+        (_as_vote(s.get("accel")),      "越走越快",       "走勢鈍化"),
+        (_as_vote(s.get("mkt_now")),    "大盤順風",       "大盤逆風"),
     ]
     return _tally(votes)
 
