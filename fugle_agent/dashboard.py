@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 07:54】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-05 07:57】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -571,7 +571,7 @@ def _render_forecast_freshness() -> None:
     nh = f"即時 {now_t}" if now_t else "即時(到秒)"
     tm = (f"今天 {now_t}　＋ 美股 {us_t}(延遲約15分)" if (now_t or us_t)
           else "今天收盤 ＋ 隔夜美股(延遲約15分)")
-    td = (f"日線 {daily_t}　＋ 外資 {cd}(每日,收盤後統計)" if cd
+    td = (f"日線 {daily_t}　＋ 外資 {daily_t}(每日,當日收盤結算)" if cd
           else "日線昨收 ＋ 外資(每日)")
     rows = [
         ("🔮", "下一小時", nh),
