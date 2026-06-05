@@ -96,11 +96,12 @@ def main() -> None:
             sys.exit(3)
         print(f"   ✅ 補名稱:追蹤 {r.get('watchlist')} / 部位 {r.get('positions')} / "
               f"實際損益 {r.get('realized')}")
-        # 順手補「市場別」(上市/上櫃)+ 名字中文化 → 每次有新交易/新追蹤都自動填上
+        # 順手補「市場別」(輕量:只查官方表、不每檔再連 Fugle,才不會拖垮 resync)。
+        # 完整版(含 Fugle 備援 + 名字中文化)由 daily_market 排程做。
         try:
             from fugle_agent.tools import fill_market_labels
-            m = fill_market_labels(eff_scope)
-            print(f"   ✅ 市場別+名字:部位 {m.get('positions')} / 追蹤 {m.get('watchlist')} 筆")
+            m = fill_market_labels(eff_scope, light=True)
+            print(f"   ✅ 市場別(輕量):部位 {m.get('positions')} / 追蹤 {m.get('watchlist')} 筆")
         except Exception as e:
             print(f"   ⚠️ 補市場別略過: {type(e).__name__}: {e}")
     elif step == "technical":
