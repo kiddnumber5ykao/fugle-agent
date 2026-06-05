@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 10:52】live_forecast.py — 即時組裝 + 上市/上櫃標示
+# ⬆️【要上傳 2026-06-05 15:16】live_forecast.py — 即時組裝 + 上市/上櫃標示
 """即時組裝層 —— 打開頁面當下,把每檔的「此刻最新數字」抓齊,餵給 forecasts 引擎。
 
 分工:
@@ -115,19 +115,12 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
     msnap = msnap or {}
     sym = str(sym).strip()
 
-    # 1) 日線/今天訊號(重用既有、已上線測過的 _compute_short_signals)
-    sig: dict = {"ok": False}
-    try:
-        from .tools import _compute_short_signals
-        sig = _compute_short_signals(sym) or {"ok": False}
-    except Exception:
-        sig = {"ok": False}
-
-    # 2) 即時報價 + 盤中分鐘K + 逐筆
+    # 1) 即時報價 + 盤中分鐘K + 逐筆(先抓報價,等下日線訊號共用同一份 → 省一次報價)
     quote: dict = {}
     candles: dict = {}
     ticks: dict = {}
     last_price = high = low = None
+    series: list = []
     try:
         from .client import FugleClient
         c = FugleClient()
@@ -143,6 +136,14 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
             series = il.series_from_ticks(ticks)
     except Exception:
         series = []
+
+    # 2) 日線/今天訊號(把上面已抓的報價傳進去,不再重抓一次報價)
+    sig: dict = {"ok": False}
+    try:
+        from .tools import _compute_short_signals
+        sig = _compute_short_signals(sym, quote=(quote or None)) or {"ok": False}
+    except Exception:
+        sig = {"ok": False}
 
     if last_price is None and sig.get("ok"):
         last_price = il._f(sig.get("current_price"))
@@ -197,7 +198,7 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
 
 
 def prefetch(items: list[tuple[str, int, float]], *, is_holding: bool,
-             max_workers: int = 6) -> dict[str, dict]:
+             max_workers: int = 8) -> dict[str, dict]:
     """並行算一整頁。items = [(sym, shares, total_cost), ...]。回 {sym: result}。"""
     from concurrent.futures import ThreadPoolExecutor
     out: dict[str, dict] = {}

@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 13:20】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
+# ⬆️【要上傳 2026-06-05 15:16】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -2508,8 +2508,9 @@ def _fetch_daily_candles_cached(sym: str, from_date: str, to_date: str) -> dict 
     return data
 
 
-def _compute_short_signals(sym: str) -> dict:
+def _compute_short_signals(sym: str, quote: dict | None = None) -> dict:
     """短線版的訊號計算 — 對單一代號抓 K 線 + 量,
+    quote:呼叫端若已抓好即時報價可傳進來,省一次重抓(加快)。
     產出 6 段白話描述 + 內部數值給 2 個技術燈號計算用。
     內建 429 重試:遇到 Fugle rate limit 自動等 20 秒再試一次。
     日線部分有 5 分鐘快取(_fetch_daily_candles_cached),即時報價仍每次抓新的。"""
@@ -2555,12 +2556,12 @@ def _compute_short_signals(sym: str) -> dict:
             prev_date = (str(bars[-2].get("date", ""))[:10]
                          if len(bars) >= 2 else "(無)")
 
-        # ① 抓 Fugle quote 即時價
+        # ① 抓 Fugle quote 即時價(若呼叫端已抓好就沿用 → 省一次報價、加快)
         current = None
         current_source = ""
         current_date_assumed = ""
         try:
-            q = _client.quote(sym)
+            q = quote if quote else _client.quote(sym)
             if isinstance(q, dict):
                 for k in ("lastPrice", "closePrice", "price"):
                     v = q.get(k)
@@ -3632,20 +3633,32 @@ def _position_advice(row: dict) -> str:
 
 
 def fill_market_labels(scope: str = "all") -> dict:
-    """把每檔的『市場別』(上市/上櫃/興櫃)填回 Sheet 的「市場別」欄。
-    來源:free_fetch.get_market(官方證交所 BWIBBU + 櫃買清單,整包抓一次、查表)。
-    上市/上櫃幾乎不變 → 一天跑一次就好(由 daily_market.yml 排程)。
+    """一次把 Sheet 的『市場別』(上市/上櫃)+ 『名字中文化』都弄好。
+      - 市場別:free_fetch.get_market(官方證交所 BWIBBU + 櫃買清單)。
+      - 名字:只改「空白 或 非中文(英文)」的 → 用官方中文簡稱(_lookup_stock_name);
+              你已經打中文的名字不動。
+    上市/上櫃幾乎不變、名字也不太變 → 一天跑一次就好(由 daily_market.yml 排程,也可手動跑)。
     需求:Sheet 的「股票部位」「追蹤清單」分頁要先各有一個表頭叫『市場別』的欄,
           沒有的話 Apps Script 會略過不寫(不會報錯)。"""
     do_pos = scope in ("all", "positions")
     do_wl = scope in ("all", "watchlist")
     n_pos = n_wl = 0
 
-    def _mk(sym: str) -> str:
+    def _fix(sym: str, cur_name: str) -> tuple[str, str]:
+        """回 (市場別 or '', 新中文名 or '')。名字只在原本非中文時才查/改。"""
         try:
-            return free_fetch.get_market(sym) or ""
+            m = free_fetch.get_market(sym) or ""
         except Exception:
-            return ""
+            m = ""
+        new_name = ""
+        if not _has_cjk(cur_name):
+            try:
+                nm = _lookup_stock_name(sym)
+                if _has_cjk(nm):
+                    new_name = nm
+            except Exception:
+                new_name = ""
+        return m, new_name
 
     if do_wl:
         try:
@@ -3655,13 +3668,18 @@ def fill_market_labels(scope: str = "all") -> dict:
                 sym = str(w.get("symbol") or w.get("代號") or "").strip()
                 if not sym:
                     continue
-                m = _mk(sym)
-                if not m:
-                    continue
-                if sheets_writer.upsert_watchlist_item(symbol=sym, 代號=sym, 市場別=m).get("ok"):
+                cur = str(w.get("name") or w.get("名稱") or "").strip()
+                m, nm = _fix(sym, cur)
+                payload: dict = {"symbol": sym, "代號": sym}
+                if m:
+                    payload["市場別"] = m
+                if nm:
+                    payload["name"] = nm
+                    payload["名稱"] = nm
+                if len(payload) > 2 and sheets_writer.upsert_watchlist_item(**payload).get("ok"):
                     n_wl += 1
         except Exception as e:
-            print(f"⚠️ 填追蹤清單市場別失敗: {e}", flush=True)
+            print(f"⚠️ 追蹤清單名字/市場別失敗: {e}", flush=True)
 
     if do_pos:
         try:
@@ -3671,13 +3689,18 @@ def fill_market_labels(scope: str = "all") -> dict:
                 sym = str(p.get("symbol") or "").strip()
                 if not sym:
                     continue
-                m = _mk(sym)
-                if not m:
-                    continue
-                if sheets_writer.upsert_position(symbol=sym, 代號=sym, 市場別=m).get("ok"):
+                cur = str(p.get("name") or "").strip()
+                m, nm = _fix(sym, cur)
+                payload = {"symbol": sym, "代號": sym}
+                if m:
+                    payload["市場別"] = m
+                if nm:
+                    payload["name"] = nm
+                    payload["名稱"] = nm
+                if len(payload) > 2 and sheets_writer.upsert_position(**payload).get("ok"):
                     n_pos += 1
         except Exception as e:
-            print(f"⚠️ 填部位市場別失敗: {e}", flush=True)
+            print(f"⚠️ 部位名字/市場別失敗: {e}", flush=True)
 
     return {"ok": True, "positions": n_pos, "watchlist": n_wl}
 
