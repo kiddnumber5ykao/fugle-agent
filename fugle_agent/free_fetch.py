@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 00:21】free_fetch.py — 免費官方資料 + 上櫃估值 + 市場別標記
+# ⬆️【要上傳 2026-06-05 13:20】free_fetch.py — 免費官方資料 + 上櫃估值 + 市場別標記
 """免費官方資料抓取 — 估值 / 月營收 / 新聞,給 _fetch_fundamentals 用。
 
 目的:把最貴的 Anthropic `web_search` 拿掉。改成:
@@ -187,6 +187,55 @@ def get_valuation(sym: str) -> dict:
 def get_market(sym: str) -> str:
     """從官方估值清單判斷 上市/上櫃(5289 在櫃買清單 → 上櫃)。查不到回 ""。"""
     return get_valuation(sym).get("market", "") or ""
+
+
+# ===========================================================================
+# 公司中文簡稱 — 證交所 t187ap03_L(上市) + 櫃買 mopsfin_t187ap03_O(上櫃)
+#   給「補名字」用,涵蓋所有上市櫃,確保是中文(不像 Fugle 免費版常給英文)。
+# ===========================================================================
+
+_name_cache: Optional[dict[str, str]] = None
+
+_NAME_ENDPOINTS = [
+    "https://openapi.twse.com.tw/v1/opendata/t187ap03_L",     # 上市(公司代號 / 公司簡稱)
+    "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O",  # 上櫃
+]
+
+
+def _build_name_cache() -> dict[str, str]:
+    """抓官方公司清單,建 {代號: 中文簡稱}。欄位用名稱比對(中英都吃)。"""
+    out: dict[str, str] = {}
+    for url in _NAME_ENDPOINTS:
+        try:
+            arr = json.loads(_http_get(url))
+        except Exception:
+            continue
+        if not isinstance(arr, list):
+            continue
+        for d in arr:
+            if not isinstance(d, dict):
+                continue
+            sym = _clean_sym(_pick(d, "公司代號") or _pick(d, "SecuritiesCompanyCode")
+                             or _pick(d, "代號") or _pick(d, "Code"))
+            # 優先「簡稱」,沒有就退「公司名稱」(至少是中文)
+            nm = (_pick(d, "公司簡稱") or _pick(d, "簡稱")
+                  or _pick(d, "CompanyAbbreviation") or _pick(d, "公司名稱")
+                  or _pick(d, "CompanyName"))
+            nm = str(nm or "").strip()
+            if sym and nm:
+                out.setdefault(sym, nm)
+    return out
+
+
+def get_name(sym: str) -> str:
+    """官方中文簡稱(上市櫃)。查不到回 ""。process 內快取一次。"""
+    global _name_cache
+    if _name_cache is None:
+        try:
+            _name_cache = _build_name_cache()
+        except Exception:
+            _name_cache = {}
+    return _name_cache.get(_clean_sym(sym), "") or ""
 
 
 # ===========================================================================

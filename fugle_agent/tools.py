@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 10:37】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
+# ⬆️【要上傳 2026-06-05 13:20】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -162,6 +162,15 @@ def _lookup_stock_name(symbol: str) -> str:
             name = hits[0].get("name", "")
     except Exception:
         pass
+
+    # 1.5) 還沒拿到中文 → 用官方公司清單的「中文簡稱」(涵蓋所有上市櫃,最可靠)
+    if not _has_cjk(name):
+        try:
+            zh = free_fetch.get_name(symbol)
+            if _has_cjk(zh):
+                name = zh
+        except Exception:
+            pass
 
     # 2) 若還沒拿到「中文」名字,從 Fugle quote 找(name 欄常是英文 → 優先挑有中文的)
     #    撞到 429 / 暫時失敗就重試最多 3 次
