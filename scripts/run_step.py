@@ -84,10 +84,10 @@ def main() -> None:
     print(f"▶️  步驟 {step}/{scope} 開始 @ {t0.isoformat(timespec='seconds')}")
 
     if step == "market":
-        # 每天一次:把上市/上櫃填回 Sheet 的「市場別」欄(輕量,不碰其他欄位)
+        # 每天一次:名字中文化 + 填上市/上櫃(只改空白/英文名,中文名不動;輕量)
         from fugle_agent.tools import fill_market_labels
         r = fill_market_labels(eff_scope)
-        print(f"   ✅ 市場別:部位 {r.get('positions')} / 追蹤 {r.get('watchlist')}")
+        print(f"   ✅ 名字+市場別:部位 {r.get('positions')} / 追蹤 {r.get('watchlist')} 筆有更新")
     elif step == "resync":
         # 依 scope 只動該動的分頁(positions 不碰追蹤清單,反之亦然)
         r = resync_and_fill_names(eff_scope)
