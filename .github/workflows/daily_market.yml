@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 15:25】daily_market.yml — 每天:名字中文化 + 市場別(補上 Fugle 金鑰)
+# ⬆️【要上傳 2026-06-05 23:02】daily_market.yml — 每天:名字中文化 + 市場別(補上 Fugle 金鑰)
 name: 每日 名字中文化 + 市場別
 
 on:
@@ -16,7 +16,7 @@ on:
 jobs:
   market:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

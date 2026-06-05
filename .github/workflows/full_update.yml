@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-05-31 20:54  (原最後更新 2026-05-29)(多 job 平行:技術+基本面同時跑)
+# ⬆️【要上傳 2026-06-05 23:02】full_update.yml — resync 加輕量市場別 + 放寬 resync 時間上限到 25 分
 name: 全更新 (重算+技術+基本面)
 run-name: 全更新 [${{ inputs.scope || 'all' }}]
 
@@ -22,7 +22,7 @@ env:
 jobs:
   resync:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
