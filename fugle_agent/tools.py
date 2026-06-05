@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 10:23】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
+# ⬆️【要上傳 2026-06-05 10:37】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -3620,6 +3620,57 @@ def _position_advice(row: dict) -> str:
     if gain:
         return f"全部賣掉[{gain}又明顯轉弱{extra},獲利了結出場]"
     return f"全部賣掉[明顯轉弱又在虧{extra},別凹,停損出場]"
+
+
+def fill_market_labels(scope: str = "all") -> dict:
+    """把每檔的『市場別』(上市/上櫃/興櫃)填回 Sheet 的「市場別」欄。
+    來源:free_fetch.get_market(官方證交所 BWIBBU + 櫃買清單,整包抓一次、查表)。
+    上市/上櫃幾乎不變 → 一天跑一次就好(由 daily_market.yml 排程)。
+    需求:Sheet 的「股票部位」「追蹤清單」分頁要先各有一個表頭叫『市場別』的欄,
+          沒有的話 Apps Script 會略過不寫(不會報錯)。"""
+    do_pos = scope in ("all", "positions")
+    do_wl = scope in ("all", "watchlist")
+    n_pos = n_wl = 0
+
+    def _mk(sym: str) -> str:
+        try:
+            return free_fetch.get_market(sym) or ""
+        except Exception:
+            return ""
+
+    if do_wl:
+        try:
+            for w in (sheets.load_watchlist() or []):
+                if w.get("_error"):
+                    continue
+                sym = str(w.get("symbol") or w.get("代號") or "").strip()
+                if not sym:
+                    continue
+                m = _mk(sym)
+                if not m:
+                    continue
+                if sheets_writer.upsert_watchlist_item(symbol=sym, 代號=sym, 市場別=m).get("ok"):
+                    n_wl += 1
+        except Exception as e:
+            print(f"⚠️ 填追蹤清單市場別失敗: {e}", flush=True)
+
+    if do_pos:
+        try:
+            for p in (sheets.load_positions() or []):
+                if p.get("_error"):
+                    continue
+                sym = str(p.get("symbol") or "").strip()
+                if not sym:
+                    continue
+                m = _mk(sym)
+                if not m:
+                    continue
+                if sheets_writer.upsert_position(symbol=sym, 代號=sym, 市場別=m).get("ok"):
+                    n_pos += 1
+        except Exception as e:
+            print(f"⚠️ 填部位市場別失敗: {e}", flush=True)
+
+    return {"ok": True, "positions": n_pos, "watchlist": n_wl}
 
 
 def resync_and_fill_names(scope: str = "all") -> dict:
