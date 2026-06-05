@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 13:20】free_fetch.py — 免費官方資料 + 上櫃估值 + 市場別標記
+# ⬆️【要上傳 2026-06-05 14:55】free_fetch.py — 免費官方資料 + 上櫃估值 + 市場別標記
 """免費官方資料抓取 — 估值 / 月營收 / 新聞,給 _fetch_fundamentals 用。
 
 目的:把最貴的 Anthropic `web_search` 拿掉。改成:
@@ -184,58 +184,74 @@ def get_valuation(sym: str) -> dict:
                                  "data_date": "", "market": ""})
 
 
-def get_market(sym: str) -> str:
-    """從官方估值清單判斷 上市/上櫃(5289 在櫃買清單 → 上櫃)。查不到回 ""。"""
-    return get_valuation(sym).get("market", "") or ""
-
-
 # ===========================================================================
-# 公司中文簡稱 — 證交所 t187ap03_L(上市) + 櫃買 mopsfin_t187ap03_O(上櫃)
-#   給「補名字」用,涵蓋所有上市櫃,確保是中文(不像 Fugle 免費版常給英文)。
+# 公司基本資料註冊表 — 同時給「市場別」+「中文簡稱」用,涵蓋所有上市/上櫃。
+#   上市:證交所 openapi t187ap03_L(公司代號 / 公司簡稱)
+#   上櫃:櫃買 openapi mopsfin_t187ap03_O(SecuritiesCompanyCode / CompanyAbbreviation)
+#   ★ 用「公司基本資料」清單(完整),不是「本益比清單」(會漏掉虧損股,例如 6274)。
+#   ★ 注意:這兩個清單很大(>70KB)。GitHub Actions 用 urllib 抓是「完整」的;
+#     只有開發機的 web_fetch 工具有 70KB 上限會截斷(所以開發機測不到後段代號)。
 # ===========================================================================
 
-_name_cache: Optional[dict[str, str]] = None
-
-_NAME_ENDPOINTS = [
-    "https://openapi.twse.com.tw/v1/opendata/t187ap03_L",     # 上市(公司代號 / 公司簡稱)
-    "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O",  # 上櫃
-]
+# {代號: {"name": 中文簡稱, "market": "上市"/"上櫃"}}
+_registry_cache: Optional[dict[str, dict]] = None
 
 
-def _build_name_cache() -> dict[str, str]:
-    """抓官方公司清單,建 {代號: 中文簡稱}。欄位用名稱比對(中英都吃)。"""
-    out: dict[str, str] = {}
-    for url in _NAME_ENDPOINTS:
-        try:
-            arr = json.loads(_http_get(url))
-        except Exception:
-            continue
-        if not isinstance(arr, list):
-            continue
-        for d in arr:
-            if not isinstance(d, dict):
-                continue
-            sym = _clean_sym(_pick(d, "公司代號") or _pick(d, "SecuritiesCompanyCode")
-                             or _pick(d, "代號") or _pick(d, "Code"))
-            # 優先「簡稱」,沒有就退「公司名稱」(至少是中文)
-            nm = (_pick(d, "公司簡稱") or _pick(d, "簡稱")
-                  or _pick(d, "CompanyAbbreviation") or _pick(d, "公司名稱")
-                  or _pick(d, "CompanyName"))
-            nm = str(nm or "").strip()
-            if sym and nm:
-                out.setdefault(sym, nm)
+def _build_registry() -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    # 上市
+    try:
+        arr = json.loads(_http_get("https://openapi.twse.com.tw/v1/opendata/t187ap03_L"))
+        if isinstance(arr, list):
+            for d in arr:
+                if not isinstance(d, dict):
+                    continue
+                sym = _clean_sym(_pick(d, "公司代號") or _pick(d, "代號"))
+                nm = str(_pick(d, "公司簡稱") or _pick(d, "簡稱") or "").strip()
+                if sym:
+                    out[sym] = {"name": nm, "market": "上市"}
+    except Exception:
+        pass
+    # 上櫃(不覆蓋已在上市表的)
+    try:
+        arr = json.loads(_http_get("https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap03_O"))
+        if isinstance(arr, list):
+            for d in arr:
+                if not isinstance(d, dict):
+                    continue
+                sym = _clean_sym(_pick(d, "SecuritiesCompanyCode") or _pick(d, "公司代號")
+                                 or _pick(d, "代號") or _pick(d, "Code"))
+                nm = str(_pick(d, "CompanyAbbreviation") or _pick(d, "公司簡稱")
+                         or _pick(d, "簡稱") or _pick(d, "CompanyName")
+                         or _pick(d, "公司名稱") or "").strip()
+                if sym and sym not in out:
+                    out[sym] = {"name": nm, "market": "上櫃"}
+    except Exception:
+        pass
     return out
+
+
+def _registry_get(sym: str) -> dict:
+    global _registry_cache
+    if _registry_cache is None:
+        try:
+            _registry_cache = _build_registry()
+        except Exception:
+            _registry_cache = {}
+    return _registry_cache.get(_clean_sym(sym), {})
+
+
+def get_market(sym: str) -> str:
+    """上市/上櫃。先查完整公司基本資料表;查不到再退回估值清單。回不出回 ""。"""
+    m = _registry_get(sym).get("market", "")
+    if m:
+        return m
+    return get_valuation(sym).get("market", "") or ""
 
 
 def get_name(sym: str) -> str:
     """官方中文簡稱(上市櫃)。查不到回 ""。process 內快取一次。"""
-    global _name_cache
-    if _name_cache is None:
-        try:
-            _name_cache = _build_name_cache()
-        except Exception:
-            _name_cache = {}
-    return _name_cache.get(_clean_sym(sym), "") or ""
+    return _registry_get(sym).get("name", "") or ""
 
 
 # ===========================================================================
