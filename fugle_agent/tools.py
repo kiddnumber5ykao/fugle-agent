@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 15:16】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
+# ⬆️【要上傳 2026-06-05 15:25】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -3650,6 +3650,19 @@ def fill_market_labels(scope: str = "all") -> dict:
             m = free_fetch.get_market(sym) or ""
         except Exception:
             m = ""
+        # 官方清單沒收(冷門上櫃)→ 用 Fugle 報價的市場欄補判
+        if not m:
+            try:
+                q = _client.quote(sym) or {}
+                mm = str(q.get("market") or q.get("exchange") or "").upper().strip()
+                if mm in ("OTC", "TPEX", "OTCEX", "ROTC", "TWO"):
+                    m = "上櫃"
+                elif mm in ("TSE", "TWSE", "TWS", "LISTED", "TW"):
+                    m = "上市"
+                elif mm in ("ESB", "EMERGING", "EMERGINGSTOCK", "ROTC2"):
+                    m = "興櫃"
+            except Exception:
+                pass
         new_name = ""
         if not _has_cjk(cur_name):
             try:
