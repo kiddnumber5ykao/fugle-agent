@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 10:30】forecasts.py — 下一小時改「抓剛轉向」(近15分走勢+剛翻向)
+# ⬆️【要上傳 2026-06-05 10:52】forecasts.py — 下一小時改「抓剛轉向」(近15分走勢+剛翻向)
 """三盞預測:下一小時 / 明天 / 三天後 —— 用「同一份此刻最新快照」算。
 
 設計原則:
@@ -31,6 +31,7 @@ TD_MA_UP = 0.0        # 三天後:站上/跌破均線%
 TD_MA_DN = -2.0
 RSI_OVERBOUGHT = 72   # 過熱 → 偏空一票(物極必反)
 RSI_OVERSOLD = 30     # 超賣 → 偏多一票
+TAKE_PROFIT_MIN = 6.0   # 持股賺超過這% + 動能轉弱 → 提示「見好就收」(短線設定,可調)
 
 
 def _num(v: Any) -> Optional[float]:
@@ -194,8 +195,10 @@ def _as_vote(v: Any) -> Optional[int]:
 # ===========================================================================
 
 def combined_action(nh: dict, tm: dict, td: dict, *,
-                    is_holding: bool, headwind: bool = False) -> str:
-    """nh/tm/td 是三盞預測結果(含 dir: 1/0/-1)。回一句白話「怎麼辦」。"""
+                    is_holding: bool, headwind: bool = False,
+                    pnl_pct: float | None = None) -> str:
+    """nh/tm/td 是三盞預測結果(含 dir: 1/0/-1)。pnl_pct=目前損益%(持股才有)。
+    回一句白話「怎麼辦」。"""
     near = int(nh.get("dir", 0))      # 下一小時
     tm_dir = int(tm.get("dir", 0))    # 明天
     td_dir = int(td.get("dir", 0))    # 三天後
@@ -209,6 +212,12 @@ def combined_action(nh: dict, tm: dict, td: dict, *,
             if near > 0:
                 return "🔴 想減/出、可等這波衝高一點再出"
             return "🔴 考慮減碼或出場"
+        # 見好就收:已經賺一波(pnl_pct 夠高)+ 近期動能轉弱(此刻在殺 或 明天偏下),
+        # 就算波段(三天後)還沒翻空,也提示先落袋一部分,別把賺到的吐回去。
+        in_good_profit = pnl_pct is not None and pnl_pct >= TAKE_PROFIT_MIN
+        fading = (near < 0) or (tm_dir < 0)
+        if in_good_profit and fading:
+            return f"🟠 見好就收、先獲利了結一部分(已賺 {pnl_pct:.0f}%、動能轉弱)"
         if far >= 2:
             if near < 0:
                 return "🟢 抱著、別追加(此刻在殺、等它穩)"
@@ -241,8 +250,9 @@ def _brake_buy(text: str, headwind: bool) -> str:
     return text + "　🌡️ 但大盤逆風,想買的話等大盤穩一點再進"
 
 
-def all_three(snapshot: dict, *, is_holding: bool, headwind: bool = False) -> dict:
-    """一次算三盞 + 怎麼辦。snapshot 是抽好的此刻最新數字。"""
+def all_three(snapshot: dict, *, is_holding: bool, headwind: bool = False,
+              pnl_pct: float | None = None) -> dict:
+    """一次算三盞 + 怎麼辦。snapshot 是抽好的此刻最新數字。pnl_pct=目前損益%(見好就收用)。"""
     nh = next_hour(snapshot)
     tm = tomorrow(snapshot)
     td = three_day(snapshot)
@@ -250,5 +260,6 @@ def all_three(snapshot: dict, *, is_holding: bool, headwind: bool = False) -> di
         "next_hour": nh,
         "tomorrow": tm,
         "three_day": td,
-        "action": combined_action(nh, tm, td, is_holding=is_holding, headwind=headwind),
+        "action": combined_action(nh, tm, td, is_holding=is_holding,
+                                  headwind=headwind, pnl_pct=pnl_pct),
     }

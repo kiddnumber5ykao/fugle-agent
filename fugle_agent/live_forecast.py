@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 10:04】live_forecast.py — 即時組裝 + 上市/上櫃標示
+# ⬆️【要上傳 2026-06-05 10:52】live_forecast.py — 即時組裝 + 上市/上櫃標示
 """即時組裝層 —— 打開頁面當下,把每檔的「此刻最新數字」抓齊,餵給 forecasts 引擎。
 
 分工:
@@ -180,9 +180,11 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
         "mkt_swing":       msnap.get("mkt_swing"),
     }
 
+    pnl = _compute_pnl(sym, last_price, shares, total_cost, fee_rate, fee_min)
     res = forecasts.all_three(snap, is_holding=is_holding,
-                              headwind=bool(msnap.get("headwind")))
-    res["pnl"] = _compute_pnl(sym, last_price, shares, total_cost, fee_rate, fee_min)
+                              headwind=bool(msnap.get("headwind")),
+                              pnl_pct=(pnl or {}).get("損益%"))
+    res["pnl"] = pnl
     res["price"] = round(last_price, 2) if last_price is not None else None
     res["market"] = _market_label(quote)
     try:
