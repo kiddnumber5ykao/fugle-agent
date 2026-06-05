@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 10:37】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-05 12:05】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -479,19 +479,29 @@ def _market_ctx_cached() -> dict:
 def _us_market_cached() -> dict:
     """美股三大指數(yfinance,延遲約 15 分)。回 {items, date, light}。
     light 算法跟大盤盤前一樣:三指數平均 ≥+0.5%→偏強、≤-0.5%→偏弱、其餘普通。"""
+    import math
     out: dict = {"items": {}, "date": "", "time": "", "light": "🟡 普通"}
     try:
         from fugle_agent import us_market
         asof = ""
         for zh, sym in (("費半", "^SOX"), ("標普", "^GSPC"), ("那斯達克", "^IXIC")):
             q = us_market.quote(sym)
-            if isinstance(q, dict) and not q.get("error") and q.get("changePercent") is not None:
-                out["items"][zh] = float(q["changePercent"])
+            cp = q.get("changePercent") if isinstance(q, dict) and not q.get("error") else None
+            # 🛡️ 擋掉 None / NaN(NaN 會顯示成 +nan%)
+            if cp is not None and not (isinstance(cp, float) and math.isnan(cp)):
+                out["items"][zh] = float(cp)
                 if not asof and q.get("asOf"):
                     asof = str(q["asOf"])[:10]
         out["date"] = asof
         if out["items"]:
-            out["time"] = us_market.latest_index_time()    # 台北 到分(延遲約15分)
+            # 美股是否「現在開盤中」:美東 09:30–16:00 ≈ 台北 21:30→隔天 05:00(夏令時誤差抓寬)
+            _twh = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).hour
+            us_live = (_twh >= 21 or _twh < 5)
+            if us_live:
+                out["time"] = us_market.latest_index_time()          # 盤中:到分(延遲約15分)
+            else:
+                # 收盤後(台灣白天):顯示「美股交易日 + 收盤」,別用換算成凌晨的時間戳誤導
+                out["time"] = (f"{asof} 收盤" if asof else us_market.latest_index_time())
             avg = sum(out["items"].values()) / len(out["items"])
             out["light"] = "🟢 偏強" if avg >= 0.5 else ("🔴 偏弱" if avg <= -0.5 else "🟡 普通")
     except Exception:

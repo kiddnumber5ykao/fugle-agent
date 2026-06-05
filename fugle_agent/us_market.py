@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 00:21】us_market.py — 加美股最新資料時間(到分,台北)
+# ⬆️【要上傳 2026-06-05 12:04】us_market.py — 加美股最新資料時間(到分,台北)
 """US / global stock data + per-ticker news via yfinance.
 
 Covers:
@@ -36,7 +36,10 @@ def quote(symbol: str) -> dict:
     try:
         ticker = yf.Ticker(symbol)  # type: ignore
         info = getattr(ticker, "fast_info", None)
-        hist = ticker.history(period="5d", auto_adjust=False)
+        hist = ticker.history(period="7d", auto_adjust=False)
+        # 🛡️ 丟掉 Close 是 NaN 的列(yfinance 偶爾回「還沒成形/空值」的最後一筆 → 會算出 nan%)
+        if hist is not None and not hist.empty and "Close" in hist:
+            hist = hist.dropna(subset=["Close"])
         if hist is None or hist.empty:
             return {"error": f"找不到 {symbol} 的資料"}
         last = hist.iloc[-1]
