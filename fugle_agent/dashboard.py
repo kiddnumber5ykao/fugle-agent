@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 18:25】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-06 09:20】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -429,6 +429,35 @@ def _prefetch_forecasts(items: tuple, is_holding: bool) -> dict:
         return live_forecast.prefetch(list(items), is_holding=is_holding)
     except Exception:
         return {}
+
+
+def _forecasts_from_cache_or_live(rows: list, is_holding: bool) -> dict:
+    """先讀 Sheet 的「燈號快取」欄(背景每幾分鐘算好 → 秒開);沒有/壞掉的那幾檔才即時補算。"""
+    import json as _json
+    fcs: dict = {}
+    need: list = []
+    for r in rows:
+        sym = str(_g(r, "代號", "symbol") or "").lstrip("'").strip()
+        if not sym:
+            continue
+        raw = _g(r, "燈號快取")
+        fc = None
+        if raw:
+            try:
+                fc = _json.loads(raw)
+            except Exception:
+                fc = None
+        if isinstance(fc, dict) and fc.get("ok"):
+            fcs[sym] = fc
+        else:   # 還沒被背景算到(剛加的)或壞掉 → 即時補這一檔
+            need.append((sym, int(_num(_g(r, "股數")) or 0),
+                         float(_num(_g(r, "總成本")) or 0.0)))
+    if need:
+        try:
+            fcs.update(_prefetch_forecasts(tuple(need), is_holding))
+        except Exception:
+            pass
+    return fcs
 
 
 def _fc_get(r: dict) -> dict:
@@ -916,14 +945,8 @@ def _render_totals() -> None:
     except Exception:
         rows = []
     cost = sum(_num(_g(r, "總成本")) or 0 for r in rows)
-    # 損益改即時算(不存 Sheet):用同一份快取的預測結果加總
-    items = tuple(
-        (str(_g(r, "代號") or _g(r, "symbol")),
-         int(_num(_g(r, "股數")) or 0),
-         float(_num(_g(r, "總成本")) or 0.0))
-        for r in rows if (_g(r, "代號") or _g(r, "symbol"))
-    )
-    fcs = _prefetch_forecasts(items, True)
+    # 損益用「燈號快取」加總(背景每幾分鐘算好);沒有的才即時補算
+    fcs = _forecasts_from_cache_or_live(rows, True)
     pnl = sum((v.get("pnl") or {}).get("損益", 0) or 0 for v in fcs.values())
     realized = _realized_total()
     m1, m2, m3 = st.columns(3)
@@ -934,18 +957,9 @@ def _render_totals() -> None:
 
 def _render_stock_list(rows: list[dict], card_fn, act_top: bool = True,
                        is_holding: bool = True) -> None:
-    """即時算好整頁的三盞預測 + 怎麼辦,依「怎麼辦」的燈色分組(要注意的排最前)。"""
-    # 一次並行算好整頁(快取 15 秒);卡片只讀結果、不各自打網路。
-    items = tuple(
-        (str(_g(r, "代號") or _g(r, "symbol")),
-         int(_num(_g(r, "股數")) or 0),
-         float(_num(_g(r, "總成本")) or 0.0))
-        for r in rows if (_g(r, "代號") or _g(r, "symbol"))
-    )
-    try:
-        st.session_state["_forecasts"] = _prefetch_forecasts(items, is_holding)
-    except Exception:
-        st.session_state["_forecasts"] = {}
+    """整頁三盞預測 + 怎麼辦,依「怎麼辦」的燈色分組(要注意的排最前)。
+    優先讀 Sheet 的「燈號快取」(背景每幾分鐘算好 → 秒開),沒有的才即時補算。"""
+    st.session_state["_forecasts"] = _forecasts_from_cache_or_live(rows, is_holding)
 
     def _act(r: dict) -> str:
         return _fc_get(r).get("action") or _g(r, "我該做啥", "綜合建議") or ""

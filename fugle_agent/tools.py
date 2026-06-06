@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 23:22】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
+# ⬆️【要上傳 2026-06-06 09:20】tools.py — 公司面免費資料+走勢敏感+公司簡介+上櫃營收待補
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -192,10 +192,18 @@ def _lookup_stock_name(symbol: str) -> str:
                 _time.sleep(2 * (attempt + 1))   # 2s, 4s 退避
 
     # 3) yfinance 最後備援(.TW / .TWO)— 連 Fugle 都查不到的冷門股
+    #    先用「市場別」挑對的後綴(上市=.TW、上櫃/興櫃=.TWO),避免試錯後綴噴 404、也比較快。
     if not name:
         try:
+            mk = ""
+            try:
+                mk = free_fetch.get_market(symbol)
+            except Exception:
+                mk = ""
+            suffixes = ((".TWO", ".TW") if mk in ("上櫃", "興櫃")
+                        else (".TW", ".TWO"))
             import yfinance as _yf
-            for suffix in (".TW", ".TWO"):
+            for suffix in suffixes:
                 try:
                     info = _yf.Ticker(f"{symbol}{suffix}").info or {}
                     # 優先 shortName(短)再 longName(全名),避免出現「…Technology Corporation」一長串
@@ -2588,8 +2596,13 @@ def _compute_short_signals(sym: str, quote: dict | None = None) -> dict:
         if current is None or (current == prev_close and current_date_assumed != today_str):
             try:
                 import yfinance as _yf
-                # 台股加 .TW(主板)或 .TWO(櫃買)後綴
-                for suffix in (".TW", ".TWO"):
+                # 台股加 .TW(上市)或 .TWO(上櫃)後綴 — 先用市場別挑對的,避免噴 404
+                try:
+                    _mk = free_fetch.get_market(sym)
+                except Exception:
+                    _mk = ""
+                _suffixes = ((".TWO", ".TW") if _mk in ("上櫃", "興櫃") else (".TW", ".TWO"))
+                for suffix in _suffixes:
                     try:
                         tk = _yf.Ticker(f"{sym}{suffix}")
                         info = tk.fast_info if hasattr(tk, "fast_info") else {}
@@ -3727,6 +3740,71 @@ def fill_market_labels(scope: str = "all", light: bool = False) -> dict:
             print(f"⚠️ 部位名字/市場別失敗: {e}", flush=True)
 
     return {"ok": True, "positions": n_pos, "watchlist": n_wl}
+
+
+def write_lights_cache(scope: str = "all") -> dict:
+    """背景把『三盞燈 + 怎麼辦 + 現價/損益』算好,存成 JSON 寫進 Sheet 的「燈號快取」欄。
+    頁面只讀這欄就秒開(不用每次即時連 Fugle)。這步不花 AI,只連 Fugle。
+    需求:兩個分頁要先各有一個表頭叫『燈號快取』的欄(沒有的話 Apps Script 會略過不寫)。"""
+    from . import live_forecast
+    out = {"ok": True, "positions": 0, "watchlist": 0}
+
+    def _run(rows: list, is_holding: bool) -> list[dict]:
+        items = []
+        for r in rows:
+            if not isinstance(r, dict) or r.get("_error"):
+                continue
+            sym = str(r.get("symbol") or r.get("代號") or "").strip().lstrip("'")
+            if not sym:
+                continue
+            items.append((sym,
+                          int(_num_safe(r.get("股數")) or 0),
+                          float(_num_safe(r.get("總成本")) or 0.0)))
+        if not items:
+            return []
+        try:
+            fcs = live_forecast.prefetch(items, is_holding=is_holding)
+        except Exception as e:
+            print(f"⚠️ 算三盞燈失敗: {e}", flush=True)
+            return []
+        payloads = []
+        for sym, fc in fcs.items():
+            try:
+                blob = json.dumps(fc, ensure_ascii=False, default=str)
+            except Exception:
+                continue
+            payloads.append({"symbol": sym, "代號": sym, "燈號快取": blob})
+        return payloads
+
+    if scope in ("all", "positions"):
+        try:
+            pl = _run(sheets.load_positions() or [], True)
+            if pl:
+                tab = os.getenv(sheets.POSITIONS_TAB_ENV, sheets.DEFAULT_POSITIONS_TAB)
+                ok = _bulk_or_parallel(tab, pl, sheets_writer.upsert_position)
+                out["positions"] = sum(1 for v in ok.values() if v)
+        except Exception as e:
+            print(f"⚠️ 寫持股燈號快取失敗: {e}", flush=True)
+
+    if scope in ("all", "watchlist"):
+        try:
+            pl = _run(sheets.load_watchlist() or [], False)
+            if pl:
+                tab = os.getenv(sheets.WATCHLIST_TAB_ENV, sheets.DEFAULT_WATCHLIST_TAB)
+                ok = _bulk_or_parallel(tab, pl, sheets_writer.upsert_watchlist_item)
+                out["watchlist"] = sum(1 for v in ok.values() if v)
+        except Exception as e:
+            print(f"⚠️ 寫追蹤燈號快取失敗: {e}", flush=True)
+
+    return out
+
+
+def _num_safe(v) -> float | None:
+    try:
+        s = str(v or "").replace(",", "").replace("$", "").strip()
+        return float(s) if s else None
+    except (ValueError, TypeError):
+        return None
 
 
 def resync_and_fill_names(scope: str = "all") -> dict:
