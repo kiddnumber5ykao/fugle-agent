@@ -1,0 +1,37 @@
+# ⬆️【要上傳 2026-06-06 09:40】lights_cache.yml — 盤中每5分把三盞燈算好寫進 Sheet(頁面只讀就秒開)
+name: 盤中燈號快取 (每5分)
+
+on:
+  schedule:
+    # 盤中每 5 分鐘跑一次(GitHub 排程的最短間隔就是 5 分,寫更短也不會更快)。
+    # UTC 1-5 點 ≈ 台北 09:00–13:59(台股 09:00 開、13:30 收)。repo 已公開 → Actions 不限量。
+    - cron: '*/5 1-5 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: '範圍 all/positions/watchlist'
+        type: string
+        required: false
+        default: all
+
+# 同一時間只跑一個,新的取代舊的(避免塞車)
+concurrency:
+  group: lights-cache
+  cancel-in-progress: true
+
+jobs:
+  lights:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip }
+      - run: pip install -r requirements.txt
+      - name: 算三盞燈寫回 Sheet
+        env:
+          FUGLE_MARKETDATA_API_KEY: ${{ secrets.FUGLE_MARKETDATA_API_KEY }}
+          SHEETS_WRITER_URL:        ${{ secrets.SHEETS_WRITER_URL }}
+          PORTFOLIO_SHEET_URL:      ${{ secrets.PORTFOLIO_SHEET_URL }}
+          FUGLE_MOCK: "0"
+        run: python scripts/run_step.py lights ${{ inputs.scope || 'all' }}
