@@ -1,29 +1,30 @@
-# ⬆️【要上傳 2026-06-06 10:05】lights_cache.yml — 盤中燈號-持股 (每5分)
-name: 盤中燈號-持股 (每5分)
+# ⬆️【要上傳 2026-06-06 10:12】lights_watchlist.yml — 盤中燈號-追蹤 (每5分,拆開並行試)
+name: 盤中燈號-追蹤 (每5分)
 
 on:
   schedule:
-    # 持股每 5 分鐘(GitHub 排程最短就是 5 分)。UTC 1-5 ≈ 台北 09:00–13:59。
+    # 追蹤每 5 分鐘(跟持股同步,但各跑各的機器、並行)。若追蹤太多跑不完(job 被 cancel),
+    # 就把這個 */5 改成 */10 或 */15 給它更寬的時間窗。UTC 1-5 ≈ 台北 09:00–13:59。
     - cron: '*/5 1-5 * * 1-5'
   workflow_dispatch:
 
 concurrency:
-  group: lights-positions
+  group: lights-watchlist
   cancel-in-progress: true
 
 jobs:
   lights:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 9
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: '3.11', cache: pip }
       - run: pip install -r requirements.txt
-      - name: 算持股三盞燈寫回 Sheet
+      - name: 算追蹤三盞燈寫回 Sheet
         env:
           FUGLE_MARKETDATA_API_KEY: ${{ secrets.FUGLE_MARKETDATA_API_KEY }}
           SHEETS_WRITER_URL:        ${{ secrets.SHEETS_WRITER_URL }}
           PORTFOLIO_SHEET_URL:      ${{ secrets.PORTFOLIO_SHEET_URL }}
           FUGLE_MOCK: "0"
-        run: python scripts/run_step.py lights positions
+        run: python scripts/run_step.py lights watchlist
