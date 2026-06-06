@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 11:42】market_context.py — 大盤永遠講台股加權(拿掉盤前改講美股)
+# ⬆️【要上傳 2026-06-06 09:10】market_context.py — 大盤永遠講台股加權(拿掉盤前改講美股)
 """大盤順逆風 — 全頁共用背景,不分個股,不存 Sheet(當下算當下用)。
 
 時間邏輯:
@@ -26,9 +26,25 @@ def _now_tw() -> datetime.datetime:
 
 _FUGLE_TAIEX = "IX0001"   # 發行量加權股價指數(加權)在 Fugle 的代號
 
+# 指數日K一天只變一次 → process 內快取 5 分鐘,避免同一次載入重複抓(去秒級即時價另算)
+import time as _time
+_IDX_BARS_CACHE: tuple[float, list] | None = None
+_IDX_BARS_TTL = 300.0
+
 
 def _index_bars() -> list[dict]:
-    """回排序好的加權指數日 K 線。Fugle 優先(穩),抓不到退 Yahoo(含重試)。"""
+    """回排序好的加權指數日 K 線(5 分鐘快取)。Fugle 優先,抓不到退 Yahoo(含重試)。"""
+    global _IDX_BARS_CACHE
+    if _IDX_BARS_CACHE and (_time.time() - _IDX_BARS_CACHE[0] < _IDX_BARS_TTL):
+        return _IDX_BARS_CACHE[1]
+    bars = _index_bars_fetch()
+    if bars:
+        _IDX_BARS_CACHE = (_time.time(), bars)
+    return bars
+
+
+def _index_bars_fetch() -> list[dict]:
+    """實際抓加權指數日 K 線。Fugle 優先(穩),抓不到退 Yahoo(含重試)。"""
     # 1) Fugle(跟你的個股同源,比較穩)
     try:
         from fugle_agent.client import FugleClient

@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 22:20】live_forecast.py — 即時組裝 + 上市/上櫃標示
+# ⬆️【要上傳 2026-06-06 09:10】live_forecast.py — 即時組裝 + 上市/上櫃標示
 """即時組裝層 —— 打開頁面當下,把每檔的「此刻最新數字」抓齊,餵給 forecasts 引擎。
 
 分工:
@@ -46,44 +46,58 @@ def _now_tw_date() -> datetime.date:
 # ───────────────────────── 全市場共用快照 ─────────────────────────
 
 def market_snapshot() -> dict:
-    """大盤方向 + 隔夜美股 + 外資(全市場一次抓)。所有股票共用,只抓一次。"""
+    """大盤方向 + 隔夜美股 + 外資(全市場一次抓)。所有股票共用,只抓一次。
+    三塊互相獨立 → 並行抓(尤其美股 yfinance 慢),整頁載入更快。"""
     out: dict[str, Any] = {"mkt_today": None, "mkt_swing": None,
                            "headwind": False, "us_overnight_pct": None,
                            "foreign": {}}
-    # 大盤
+
+    def _twii():
+        # 大盤:只算一次 _twii_signals,順便導出順逆風(不再額外呼叫 get_market_context,省一輪)
+        try:
+            from . import market_context
+            s = market_context._twii_signals()
+            if s:
+                chg = s.get("change_pct") or 0
+                out["mkt_today"] = _sign(chg)
+                out["mkt_swing"] = 1 if s.get("above_ma10") else -1
+                out["headwind"] = (not s.get("above_ma10")) and chg < 0
+        except Exception:
+            pass
+
+    def _us():
+        # 隔夜美股(費半 + 標普 平均)
+        try:
+            from . import us_market
+            vals = []
+            for sym in ("^SOX", "^GSPC"):
+                q = us_market.quote(sym)
+                if isinstance(q, dict) and not q.get("error") and q.get("changePercent") is not None:
+                    vals.append(float(q["changePercent"]))
+            if vals:
+                out["us_overnight_pct"] = sum(vals) / len(vals)
+        except Exception:
+            pass
+
+    def _foreign():
+        # 外資:抓最近一個有資料的交易日(全市場一包)
+        try:
+            from . import foreign_flow
+            for back in range(0, 5):
+                day = _now_tw_date() - datetime.timedelta(days=back)
+                fmap = foreign_flow._fetch_twse(day)
+                if fmap:
+                    out["foreign"] = fmap
+                    break
+        except Exception:
+            pass
+
+    from concurrent.futures import ThreadPoolExecutor
     try:
-        from . import market_context
-        ctx = market_context.get_market_context()
-        out["headwind"] = bool(ctx.get("is_headwind"))
-        s = market_context._twii_signals()
-        if s:
-            out["mkt_today"] = _sign(s.get("change_pct"))
-            out["mkt_swing"] = 1 if s.get("above_ma10") else -1
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            list(ex.map(lambda f: f(), (_twii, _us, _foreign)))
     except Exception:
-        pass
-    # 隔夜美股(費半 + 標普 平均)
-    try:
-        from . import us_market
-        vals = []
-        for sym in ("^SOX", "^GSPC"):
-            q = us_market.quote(sym)
-            if isinstance(q, dict) and not q.get("error") and q.get("changePercent") is not None:
-                vals.append(float(q["changePercent"]))
-        if vals:
-            out["us_overnight_pct"] = sum(vals) / len(vals)
-    except Exception:
-        pass
-    # 外資:抓最近一個有資料的交易日(全市場一包)
-    try:
-        from . import foreign_flow
-        for back in range(0, 5):
-            day = _now_tw_date() - datetime.timedelta(days=back)
-            fmap = foreign_flow._fetch_twse(day)
-            if fmap:
-                out["foreign"] = fmap
-                break
-    except Exception:
-        pass
+        _twii(); _us(); _foreign()
     return out
 
 
@@ -199,7 +213,7 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
 
 
 def prefetch(items: list[tuple[str, int, float]], *, is_holding: bool,
-             max_workers: int = 8) -> dict[str, dict]:
+             max_workers: int = 12) -> dict[str, dict]:
     """並行算一整頁。items = [(sym, shares, total_cost), ...]。回 {sym: result}。"""
     from concurrent.futures import ThreadPoolExecutor
     out: dict[str, dict] = {}
