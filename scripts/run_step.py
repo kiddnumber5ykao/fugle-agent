@@ -62,7 +62,7 @@ def _new_position_symbols(time_col: str) -> list[str]:
 def main() -> None:
     step = (sys.argv[1] if len(sys.argv) > 1 else "").lower().strip()
     scope = (sys.argv[2] if len(sys.argv) > 2 else "all").lower().strip()
-    if step not in ("resync", "technical", "fundamental", "recompute", "foreign", "market"):
+    if step not in ("resync", "technical", "fundamental", "recompute", "foreign", "market", "lights"):
         print(f"❌ 不認識的步驟: {step!r}")
         sys.exit(2)
     if scope not in ("all", "positions", "watchlist", "watchlist_new", "positions_new"):
@@ -83,7 +83,12 @@ def main() -> None:
     t0 = datetime.datetime.now()
     print(f"▶️  步驟 {step}/{scope} 開始 @ {t0.isoformat(timespec='seconds')}")
 
-    if step == "market":
+    if step == "lights":
+        # 盤中每幾分鐘:把三盞燈算好寫進 Sheet「燈號快取」欄,頁面只讀就秒開(不花 AI)
+        from fugle_agent.tools import write_lights_cache
+        r = write_lights_cache(eff_scope)
+        print(f"   ✅ 燈號快取:部位 {r.get('positions')} / 追蹤 {r.get('watchlist')} 筆")
+    elif step == "market":
         # 每天一次:名字中文化 + 填上市/上櫃(只改空白/英文名,中文名不動;輕量)
         from fugle_agent.tools import fill_market_labels
         r = fill_market_labels(eff_scope)
