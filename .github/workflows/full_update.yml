@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 23:02】full_update.yml — resync 加輕量市場別 + 放寬 resync 時間上限到 25 分
+# ⬆️【要上傳 2026-06-08 08:10】full_update.yml — 新增 lights job:每次全更新(新交易/新追蹤)順手重算燈號快取
 name: 全更新 (重算+技術+基本面)
 run-name: 全更新 [${{ inputs.scope || 'all' }}]
 
@@ -29,6 +29,18 @@ jobs:
         with: { python-version: '3.11', cache: pip }
       - run: pip install -r requirements.txt
       - run: python scripts/run_step.py resync ${{ inputs.scope || 'all' }}
+
+  market:
+    needs: resync
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip }
+      - run: pip install -r requirements.txt
+      # 完整版:市場別(含冷門上櫃 Fugle 備援)+ 名字中文化。獨立 job、不擋技術/基本面。
+      - run: python scripts/run_step.py market ${{ inputs.scope || 'all' }}
 
   technical:
     needs: resync
@@ -62,3 +74,17 @@ jobs:
         with: { python-version: '3.11', cache: pip }
       - run: pip install -r requirements.txt
       - run: python scripts/run_step.py recompute ${{ inputs.scope || 'all' }}
+
+  # 🆕 每次全更新(新交易/新追蹤)都把燈號快取重算一遍。
+  #    盤中 = 即時三盞燈;非盤中(週末/收盤後)= 用最後一次收盤資料算,至少不空白。
+  #    與 market/technical/fundamental 並行,resync 完就跑、不互相擋。
+  lights:
+    needs: resync
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip }
+      - run: pip install -r requirements.txt
+      - run: python scripts/run_step.py lights ${{ inputs.scope || 'all' }}
