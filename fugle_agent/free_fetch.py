@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 15:54】free_fetch.py — 免費官方資料 + 上櫃估值 + 市場別標記
+# ⬆️【要上傳 2026-06-08 07:55】free_fetch.py — 新增官方產業別(修公司簡介亂掰光學鏡頭的bug)
 """免費官方資料抓取 — 估值 / 月營收 / 新聞,給 _fetch_fundamentals 用。
 
 目的:把最貴的 Anthropic `web_search` 拿掉。改成:
@@ -197,6 +197,30 @@ def get_valuation(sym: str) -> dict:
 _registry_cache: Optional[dict[str, dict]] = None
 
 
+# 證交所「產業別」代碼 → 名稱。給「公司簡介」一個官方錨,
+# 不然 Haiku 不認識的公司會自己瞎掰(例:把川湖、乙盛猜成「光學鏡頭」)。
+_INDUSTRY_NAMES = {
+    "01": "水泥工業", "02": "食品工業", "03": "塑膠工業", "04": "紡織纖維",
+    "05": "電機機械", "06": "電器電纜", "08": "玻璃陶瓷", "09": "造紙工業",
+    "10": "鋼鐵工業", "11": "橡膠工業", "12": "汽車工業", "14": "建材營造",
+    "15": "航運業", "16": "觀光餐旅", "17": "金融保險", "18": "貿易百貨",
+    "19": "綜合企業", "20": "其他業", "21": "化學工業", "22": "生技醫療",
+    "23": "油電燃氣", "24": "半導體業", "25": "電腦及週邊設備業", "26": "光電業",
+    "27": "通信網路業", "28": "電子零組件業", "29": "電子通路業", "30": "資訊服務業",
+    "31": "其他電子業", "32": "文化創意業", "33": "農業科技業", "34": "電子商務業",
+    "35": "綠能環保業", "36": "數位雲端業", "37": "運動休閒業", "38": "居家生活業",
+    "80": "管理股票",
+}
+
+
+def _industry_name(code) -> str:
+    """產業別代碼(可能是 '24' / '24.0' / '24　')→ 中文產業名。查無回 ''。"""
+    m = re.search(r"\d+", str(code or ""))   # 取第一段數字,容錯 "24.0" / "24　" / 全形
+    if not m:
+        return ""
+    return _INDUSTRY_NAMES.get(m.group().zfill(2), "")
+
+
 def _build_registry() -> dict[str, dict]:
     out: dict[str, dict] = {}
     # 上市
@@ -208,8 +232,9 @@ def _build_registry() -> dict[str, dict]:
                     continue
                 sym = _clean_sym(_pick(d, "公司代號") or _pick(d, "代號"))
                 nm = str(_pick(d, "公司簡稱") or _pick(d, "簡稱") or "").strip()
+                ind = _industry_name(_pick(d, "產業別"))
                 if sym:
-                    out[sym] = {"name": nm, "market": "上市"}
+                    out[sym] = {"name": nm, "market": "上市", "industry": ind}
     except Exception:
         pass
     # 上櫃(不覆蓋已在上市表的)
@@ -224,8 +249,11 @@ def _build_registry() -> dict[str, dict]:
                 # 只取「簡稱」(短),不取全名(CompanyName 會是「…股份有限公司/…Corporation」一長串)
                 nm = str(_pick(d, "CompanyAbbreviation") or _pick(d, "公司簡稱")
                          or _pick(d, "簡稱") or "").strip()
+                # 上櫃表的產業別欄名可能不同,多試幾個;查不到就留空(交給提示詞防呆)
+                ind = _industry_name(_pick(d, "產業別") or _pick(d, "IndustryCode")
+                                     or _pick(d, "SecuritiesIndustryCode"))
                 if sym and sym not in out:
-                    out[sym] = {"name": nm, "market": "上櫃"}
+                    out[sym] = {"name": nm, "market": "上櫃", "industry": ind}
     except Exception:
         pass
     return out
@@ -252,6 +280,11 @@ def get_market(sym: str) -> str:
 def get_name(sym: str) -> str:
     """官方中文簡稱(上市櫃)。查不到回 ""。process 內快取一次。"""
     return _registry_get(sym).get("name", "") or ""
+
+
+def get_industry(sym: str) -> str:
+    """官方產業別中文名(如「電子零組件業」「鋼鐵工業」)。查不到回 ""。"""
+    return _registry_get(sym).get("industry", "") or ""
 
 
 # ===========================================================================
@@ -369,6 +402,7 @@ def gather_free_facts(sym: str, name: str = "") -> dict:
     val = get_valuation(sym)
     rev = get_revenue(sym)
     news = get_news_titles(sym, name)
+    industry = get_industry(sym)   # 官方產業別 → 當「公司簡介」的錨,避免 Haiku 瞎掰
 
     # 決定 data_date:估值日期 / 營收年月 / 今天 取最有資訊的
     data_date = val.get("data_date") or ""
@@ -381,6 +415,11 @@ def gather_free_facts(sym: str, name: str = "") -> dict:
 
     # 組「事實塊」純文字 — 只放數字事實,描述與評分交給 Haiku
     lines: list[str] = []
+    # 產業別放最前面當「公司簡介」的唯一官方依據(沒有就明講,別讓 Haiku 自己編)
+    if industry:
+        lines.append(f"【官方產業別】{industry}(公司簡介只能依這個產業 + 公司名寫,不可自行編造產品)")
+    else:
+        lines.append("【官方產業別】查無(公司簡介請寫「主營業務待補」,不要猜產品)")
     if val.get("per") is not None or val.get("yield") is not None or val.get("pbr") is not None:
         parts = []
         if val.get("per") is not None:
