@@ -797,32 +797,30 @@ def render(trigger_workflow, job_indicator, mark_job_started, cancel_all=None,
             st.caption("在『股票交易』加好交易後按這個(從交易重算持股)")
             if st.button("＋ 我剛買賣股票", use_container_width=True, disabled=page_running,
                          help="從『股票交易』重算持股的股數/成本;全新股票順便補公司資訊"
-                              "(花一點點 AI)。賺賠和三盞燈是即時算的,不用按。"):
+                              "(花一點點 AI)。賺賠是即時算的;四盞燈號會在這次更新一起重算。"):
                 _after(trigger_workflow("full_update.yml", inputs={"scope": "positions_new"}),
                        "full_update", 900, "已開始更新持股(背景跑)",
                        act_mode="持有", act_name="重算持股")
-            st.caption("更新『持股』的公司資訊:體質/估值/配息/營收/新聞/簡介(會花一點 AI 錢)。")
-            if st.button("🔄 更新持股公司資訊", use_container_width=True, disabled=page_running,
-                         help="重算所有『持股』的公司資訊(體質/估值/配息/營收/新聞/簡介,花一點 AI)。"
-                              "三盞燈是即時算的,不受這個影響。"):
+            st.caption("全更新『持股』:公司資訊(體質/估值/配息/營收/新聞/簡介)＋ 重算四盞燈號(會花一點 AI 錢)。")
+            if st.button("🔄 全更新持股(資訊+燈號)", use_container_width=True, disabled=page_running,
+                         help="整頁重跑『持股』:公司資訊(體質/估值/配息/營收/新聞/簡介)＋ 市場別 ＋ 四盞燈號快取(花一點 AI)。"):
                 _after(trigger_workflow("full_update.yml", inputs={"scope": "positions"}),
-                       "full_update", 900, "已開始更新持股公司資訊(背景跑)",
-                       act_mode="持有", act_name="更新持股公司資訊")
+                       "full_update", 900, "已開始全更新持股(背景跑)",
+                       act_mode="持有", act_name="全更新持股")
         else:
             st.caption("在『追蹤清單』加好代號後按這個")
             if st.button("＋ 我剛加追蹤", use_container_width=True, disabled=page_running,
                          help="幫追蹤清單裡新加的那幾檔算公司資訊:體質/估值/配息/營收/新聞"
-                              "(花一點 AI)。三盞燈是即時算的,不用按。"):
+                              "(花一點 AI)。四盞燈號會在這次更新一起重算。"):
                 _after(trigger_workflow("full_update.yml", inputs={"scope": "watchlist_new"}),
                        "full_update", 900, "已開始分析新追蹤(背景跑)",
                        act_mode="追蹤", act_name="分析新追蹤")
-            st.caption("更新『追蹤』的公司資訊:體質/估值/配息/營收/新聞/簡介(會花一點 AI 錢)。")
-            if st.button("🔄 更新追蹤公司資訊", use_container_width=True, disabled=page_running,
-                         help="重算所有『追蹤』的公司資訊(體質/估值/配息/營收/新聞/簡介,花一點 AI)。"
-                              "三盞燈是即時算的,不受這個影響。"):
+            st.caption("全更新『追蹤』:公司資訊(體質/估值/配息/營收/新聞/簡介)＋ 重算四盞燈號(會花一點 AI 錢)。")
+            if st.button("🔄 全更新追蹤(資訊+燈號)", use_container_width=True, disabled=page_running,
+                         help="整頁重跑『追蹤』:公司資訊(體質/估值/配息/營收/新聞/簡介)＋ 市場別 ＋ 四盞燈號快取(花一點 AI)。"):
                 _after(trigger_workflow("full_update.yml", inputs={"scope": "watchlist"}),
-                       "full_update", 900, "已開始更新追蹤公司資訊(背景跑)",
-                       act_mode="追蹤", act_name="更新追蹤公司資訊")
+                       "full_update", 900, "已開始全更新追蹤(背景跑)",
+                       act_mode="追蹤", act_name="全更新追蹤")
 
         t1, t2 = st.columns(2)
         with t1:
