@@ -1,5 +1,5 @@
-# ⬆️【要上傳 2026-06-05 17:09】forecasts.py — 下一小時改「抓剛轉向」(近15分走勢+剛翻向)
-"""三盞預測:下一小時 / 明天 / 三天後 —— 用「同一份此刻最新快照」算。
+# ⬆️【要上傳 2026-06-08 08:25】forecasts.py — 新增第4盞「今天收盤」(介於下一小時與明天之間)
+"""四盞預測:下一小時 / 今天收盤 / 明天 / 三天後 —— 用「同一份此刻最新快照」算。
 
 設計原則:
   - 每盞只看「對它的時間長度有意義」的訊號(不同尺度用不同訊號 → 才有邏輯)。
@@ -115,6 +115,32 @@ def next_hour(s: dict) -> dict:
 
 
 # ===========================================================================
+# 🕒 今天收盤 —— 從現在到 13:30,今天這根會怎麼收(介於「下一小時」和「明天」之間)
+#   下一小時看「眼前一小時的微結構」,明天看「收盤定局 + 隔夜」;
+#   這盞看「今天剩下的盤」:今天到現在的走勢 + 現價貼高/貼低 + 尾段方向 + 大盤今天。
+#   用途:決定「今天該不該當沖了結 / 還是抱過夜」。
+#   輸入:today_change_pct(今天到現在%)、close_strength(現價在今天高低位置 0~1)、
+#         now_move_pct(最近這段方向)、mkt_today(-1/0/1 大盤今天)
+# ===========================================================================
+
+def today_close(s: dict) -> dict:
+    tchg = _num(s.get("today_change_pct"))
+    chg_vote = None if tchg is None else (1 if tchg > 0 else (-1 if tchg < 0 else 0))
+    cs = _num(s.get("close_strength"))
+    pos_vote = None
+    if cs is not None:
+        pos_vote = 1 if cs >= TM_RANGE_HI else (-1 if cs <= TM_RANGE_LO else 0)
+    move_vote = _vote_threshold(_num(s.get("now_move_pct")), NH_MOVE_UP, NH_MOVE_DN)
+    votes = [
+        (chg_vote,                      "今天到現在走強", "今天到現在走弱"),
+        (pos_vote,                      "貼著今天高檔",   "壓在今天低檔"),
+        (move_vote,                     "尾段還在往上",   "尾段轉弱往下"),
+        (_as_vote(s.get("mkt_today")),  "大盤今天偏多",   "大盤今天偏弱"),
+    ]
+    return _tally(votes)
+
+
+# ===========================================================================
 # 🌤️ 明天 —— 今天收尾 + 隔夜(信心天生最低)
 #   輸入:close_strength(0~1 收盤在今天高低的位置)、today_change_pct、
 #         today_vol_ratio、us_overnight_pct(費半/標普)、mkt_today(-1/0/1)
@@ -194,18 +220,19 @@ def _as_vote(v: Any) -> Optional[int]:
 # 👉 怎麼辦 —— 遠的兩盞決定方向,最近那盞決定時機
 # ===========================================================================
 
-def combined_action(nh: dict, tm: dict, td: dict, *,
+def combined_action(nh: dict, td_close: dict, tm: dict, td: dict, *,
                     is_holding: bool, headwind: bool = False,
                     pnl_pct: float | None = None) -> str:
-    """nh/tm/td 是三盞預測結果(含 dir: 1/0/-1)。pnl_pct=目前損益%(持股才有)。
-    回一句白話「怎麼辦」。"""
-    near = int(nh.get("dir", 0))      # 下一小時
-    tm_dir = int(tm.get("dir", 0))    # 明天
-    td_dir = int(td.get("dir", 0))    # 三天後
+    """nh/td_close/tm/td 是四盞預測結果(含 dir: 1/0/-1)。pnl_pct=目前損益%(持股才有)。
+    回一句白話「怎麼辦」。遠的兩盞(明天/三天後)決定方向,近的兩盞(下一小時/今天收盤)決定時機。"""
+    near = int(nh.get("dir", 0))          # 下一小時
+    tc_dir = int(td_close.get("dir", 0))  # 今天收盤
+    tm_dir = int(tm.get("dir", 0))        # 明天
+    td_dir = int(td.get("dir", 0))        # 三天後
     # 遠的方向:三天後權重 2、明天權重 1
     far = td_dir * 2 + tm_dir
-    # 近期是否「至少有一盞站出來偏多」(下一小時 或 明天)。兩盞都沒表態 → 近期還不明朗。
-    near_supports_up = (near > 0) or (tm_dir > 0)
+    # 近期是否「至少有一盞站出來偏多」(下一小時 / 今天收盤 / 明天)。都沒表態 → 近期還不明朗。
+    near_supports_up = (near > 0) or (tc_dir > 0) or (tm_dir > 0)
 
     if is_holding:
         if far <= -2:
@@ -215,7 +242,7 @@ def combined_action(nh: dict, tm: dict, td: dict, *,
         # 見好就收:已經賺一波(pnl_pct 夠高)+ 近期動能轉弱(此刻在殺 或 明天偏下),
         # 就算波段(三天後)還沒翻空,也提示先落袋一部分,別把賺到的吐回去。
         in_good_profit = pnl_pct is not None and pnl_pct >= TAKE_PROFIT_MIN
-        fading = (near < 0) or (tm_dir < 0)
+        fading = (near < 0) or (tc_dir < 0) or (tm_dir < 0)
         if in_good_profit and fading:
             return f"🟠 見好就收、先獲利了結一部分(已賺 {pnl_pct:.0f}%、動能轉弱)"
         if far >= 2:
@@ -252,14 +279,17 @@ def _brake_buy(text: str, headwind: bool) -> str:
 
 def all_three(snapshot: dict, *, is_holding: bool, headwind: bool = False,
               pnl_pct: float | None = None) -> dict:
-    """一次算三盞 + 怎麼辦。snapshot 是抽好的此刻最新數字。pnl_pct=目前損益%(見好就收用)。"""
+    """一次算四盞 + 怎麼辦。snapshot 是抽好的此刻最新數字。pnl_pct=目前損益%(見好就收用)。
+    (函式名沿用 all_three 不改,避免動到所有呼叫端;實際回四盞。)"""
     nh = next_hour(snapshot)
+    tc = today_close(snapshot)
     tm = tomorrow(snapshot)
     td = three_day(snapshot)
     return {
         "next_hour": nh,
+        "today_close": tc,
         "tomorrow": tm,
         "three_day": td,
-        "action": combined_action(nh, tm, td, is_holding=is_holding,
+        "action": combined_action(nh, tc, tm, td, is_holding=is_holding,
                                   headwind=headwind, pnl_pct=pnl_pct),
     }

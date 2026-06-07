@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-06 09:20】dashboard.py — 卡片改版 + 按鈕進度 + 上市/上櫃標示 + 拿掉看更新狀況
+# ⬆️【要上傳 2026-06-08 08:25】dashboard.py — 卡片+新鮮度加第4盞「今天收盤」
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -602,12 +602,14 @@ def _render_forecast_freshness() -> None:
     us_t = us.get("time") or us.get("date") or ""            # 美股(延遲約15分,到分)
 
     nh = f"即時 {now_t}" if now_t else "即時(到秒)"
+    tc = f"即時 {now_t}(算到今天收盤)" if now_t else "即時(算到今天收盤)"
     tm = (f"今天 {now_t}　＋ 美股 {us_t}" if (now_t or us_t)
           else "今天收盤 ＋ 隔夜美股")
     td = (f"日線 {daily_t}　＋ 外資 {daily_t}" if cd
           else "日線昨收 ＋ 外資")
     rows = [
         ("🔮", "下一小時", nh),
+        ("🕒", "今天收盤", tc),
         ("🌤️", "明天", tm),
         ("📅", "三天後", td),
     ]
@@ -1105,7 +1107,7 @@ def _detail_common(r: dict, action: str) -> None:
         st.markdown(line + (f'<br><span style="{mut};font-size:12px">資料時間 {dt}</span>'
                             if dt else ""), unsafe_allow_html=True)
 
-    # 2) 三盞預測:⚡下一小時 → 📊明天 → 📅三天後
+    # 2) 四盞預測:⚡下一小時 → 🕒今天收盤 → 📊明天 → 📅三天後
     def _fline(icon: str, name: str, f: dict) -> str:
         lean = f.get("lean", "")
         if not lean:
@@ -1119,6 +1121,7 @@ def _detail_common(r: dict, action: str) -> None:
 
     st.markdown(
         _fline("⚡", "下一小時", fc.get("next_hour", {}))
+        + _fline("🕒", "今天收盤", fc.get("today_close", {}))
         + _fline("📊", "明天", fc.get("tomorrow", {}))
         + _fline("📅", "三天後", fc.get("three_day", {})),
         unsafe_allow_html=True)
