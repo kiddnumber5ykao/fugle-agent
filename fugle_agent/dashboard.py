@@ -1,4 +1,4 @@
-# 🔖最新批次 UI-0608-1213 ｜ ⬆️【要上傳】dashboard.py — 看全部+燈號篩選+一行摘要(四盞燈箭頭)+追蹤顯示來源〔含第4盞+按鈕改名〕
+# 🔖最新批次 30M-0608-1411 ｜ ⬆️【要上傳】dashboard.py — 摘要拿掉箭頭/每盞燈各自篩選/加「30分」盞/追蹤顯示來源〔含先前全部 UI 改動〕
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -608,7 +608,8 @@ def _render_forecast_freshness() -> None:
     td = (f"日線 {daily_t}　＋ 外資 {daily_t}" if cd
           else "日線昨收 ＋ 外資")
     rows = [
-        ("🔮", "下一小時", nh),
+        ("🔮", "下一小時(10分)", nh),
+        ("⏱️", "下一小時(30分)", nh),
         ("🕒", "今天收盤", tc),
         ("🌤️", "明天", tm),
         ("📅", "三天後", td),
@@ -955,42 +956,38 @@ def _render_totals() -> None:
     m3.metric("已實現損益(賣掉的)", f"{realized:+,.0f}")
 
 
-# 四盞燈:icon + fc 的 key。順序 = 下一小時 → 今天收盤 → 明天 → 三天後。
-_LAMP_ICONS = [("⚡", "next_hour"), ("🕒", "today_close"),
-               ("📊", "tomorrow"), ("📅", "three_day")]
-_LAMPS = {"下一小時": "next_hour", "今天收盤": "today_close",
-          "明天": "tomorrow", "三天後": "three_day"}
-
-
-def _arrow(f: dict) -> str:
-    """一盞燈 → 箭頭。資料不足 / 沒算到 → ·。"""
-    if not f or not f.get("lean") or str(f.get("lean")).startswith("⚪"):
-        return "·"
-    return {1: "↑", -1: "↓", 0: "→"}.get(int(f.get("dir", 0) or 0), "·")
-
-
-def _light_arrows(fc: dict) -> str:
-    """四盞燈一行箭頭,例如 ⚡↑🕒↑📊→📅↓。"""
-    return "".join(f"{ic}{_arrow(fc.get(k) or {})}" for ic, k in _LAMP_ICONS)
+# 五盞燈:顯示名 → fc 的 key。順序 = 下一小時(10分/30分)→ 今天收盤 → 明天 → 三天後。
+_LAMPS = {"下一小時(10分)": "next_hour", "下一小時(30分)": "next_hour_30",
+          "今天收盤": "today_close", "明天": "tomorrow", "三天後": "three_day"}
+_DIRS = {"不限": None, "↑ 偏上": 1, "↓ 偏下": -1, "→ 說不準": 0}
 
 
 def _light_filter(rows: list, key_prefix: str) -> list:
-    """頂部篩選列:選一盞燈 + 選方向 → 只留符合的股票。回篩完的 rows。"""
-    c1, c2 = st.columns(2)
-    lamp = c1.selectbox("篩選燈號", ["全部"] + list(_LAMPS),
-                        key=f"flt_lamp_{key_prefix}")
-    dirlab = c2.selectbox("方向", ["不限", "↑ 偏上", "↓ 偏下", "→ 說不準"],
-                          key=f"flt_dir_{key_prefix}", disabled=(lamp == "全部"))
-    if lamp == "全部" or dirlab == "不限":
+    """每一盞燈各一個篩選(不限/↑/↓/→),多盞同時用 = 而且(AND)。回篩完的 rows。"""
+    def cur(k):
+        return st.session_state.get(f"flt_{key_prefix}_{k}", "不限")
+
+    active = [f"{lab}{cur(k)[0]}" for lab, k in _LAMPS.items() if _DIRS.get(cur(k)) is not None]
+    title = "🔦 用燈號篩選" + ("：" + "、".join(active) if active else "（全部）")
+    with st.expander(title, expanded=bool(active)):
+        cols = st.columns(2)
+        for i, (lab, k) in enumerate(_LAMPS.items()):
+            cols[i % 2].selectbox(lab, list(_DIRS), key=f"flt_{key_prefix}_{k}")
+
+    wants = {k: _DIRS[cur(k)] for lab, k in _LAMPS.items() if _DIRS[cur(k)] is not None}
+    if not wants:
         return rows
-    want = {"↑ 偏上": 1, "↓ 偏下": -1, "→ 說不準": 0}[dirlab]
-    k = _LAMPS[lamp]
     out = []
     for r in rows:
-        f = _fc_get(r).get(k) or {}
-        if not f.get("lean") or str(f.get("lean")).startswith("⚪"):
-            continue
-        if int(f.get("dir", 0) or 0) == want:
+        fc = _fc_get(r)
+        keep = True
+        for k, want in wants.items():
+            f = fc.get(k) or {}
+            if (not f.get("lean")) or str(f.get("lean")).startswith("⚪") \
+                    or int(f.get("dir", 0) or 0) != want:
+                keep = False
+                break
+        if keep:
             out.append(r)
     return out
 
@@ -1027,7 +1024,7 @@ def _holding_card(r: dict) -> None:
     pct = pnl.get("損益%")
     pct_txt = f" {'賺' if pct >= 0 else '賠'}{abs(pct):.0f}%" if pct is not None else ""
     _dot = {"上市": "🔵", "上櫃": "🟠", "興櫃": "⚪"}.get(_g(r, "市場別") or fc.get("market") or "", "")
-    label = (f"{_dot} " if _dot else "") + f"{code} {name}{pct_txt}　{_light_arrows(fc)}　{_action_icon(action)}"
+    label = (f"{_dot} " if _dot else "") + f"{code} {name}{pct_txt}"
     with st.expander(label):
         _detail_common(r, action)
 
@@ -1040,7 +1037,7 @@ def _watch_card(r: dict) -> None:
     _dot = {"上市": "🔵", "上櫃": "🟠", "興櫃": "⚪"}.get(_g(r, "市場別") or fc.get("market") or "", "")
     src = _g(r, "來源", "追蹤理由")          # 來源:優先讀「來源」欄,沒有就讀「追蹤理由」
     src_txt = f" 〔{src}〕" if src else ""
-    label = (f"{_dot} " if _dot else "") + f"{code} {name}{src_txt}　{_light_arrows(fc)}　{_action_icon(action)}"
+    label = (f"{_dot} " if _dot else "") + f"{code} {name}{src_txt}"
     with st.expander(label):
         _detail_common(r, action)
 
@@ -1150,7 +1147,8 @@ def _detail_common(r: dict, action: str) -> None:
                 + '</div>')
 
     st.markdown(
-        _fline("⚡", "下一小時", fc.get("next_hour", {}))
+        _fline("⚡", "下一小時(10分)", fc.get("next_hour", {}))
+        + _fline("⏱️", "下一小時(30分)", fc.get("next_hour_30", {}))
         + _fline("🕒", "今天收盤", fc.get("today_close", {}))
         + _fline("📊", "明天", fc.get("tomorrow", {}))
         + _fline("📅", "三天後", fc.get("three_day", {})),

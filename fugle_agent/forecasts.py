@@ -1,4 +1,4 @@
-# 🔖最新批次 NH-0608-1158 ｜ ⬆️【要上傳】forecasts.py — 第4盞「今天收盤」+ 下一小時改「算預測斜率」(不投票)
+# 🔖最新批次 30M-0608-1411 ｜ ⬆️【要上傳】forecasts.py — 多一盞「下一小時(30分)」預測斜率(共 5 盞)
 """四盞預測:下一小時 / 今天收盤 / 明天 / 三天後 —— 用「同一份此刻最新快照」算。
 
 設計原則:
@@ -96,27 +96,20 @@ def _tally(votes: list[tuple[Optional[int], str, str]]) -> dict:
 #         accel(-1/0/1 鈍化/中/加速)、mkt_now(-1/0/1 大盤此刻)
 # ===========================================================================
 
-def next_hour(s: dict) -> dict:
-    """不投票 —— 算一個數字「預測下 N 分鐘斜率」:
-       預測 = 2 × 後10分% − 前10分%(等加速度外推:現在速度 + 加速度),
-       再乘買賣力道權重(內外盤同向放大、相反縮小)。
-    回 {lean, dir, conf, reason, pred_pct}。資料不足 → ⚪。"""
-    s_recent = _num(s.get("now_move_pct"))    # 後10分%(現在速度)
-    s_prior = _num(s.get("prior_move_pct"))   # 前10分%(上一段)
+def _predict_slope(s_recent: Optional[float], s_prior: Optional[float],
+                   net: Optional[float]) -> dict:
+    """共用:預測下一段斜率 = 2×後 − 前(等加速度外推),再乘買賣力道權重。
+    s_recent/s_prior = 後半/前半漲跌%;net = 內外盤淨值 -1~1。回 {lean,dir,conf,reason,pred_pct}。"""
     if s_recent is None or s_prior is None:
         return {"lean": "⚪ 資料不足", "dir": 0, "conf": "低", "reason": "", "pred_pct": None}
 
-    pred = 2.0 * s_recent - s_prior           # 預測下 N 分斜率(%)
-
-    # 買賣力道加權:net ∈ -1~1,同向放大、相反縮小;沒資料就不調(w=1)
-    net = _num(s.get("pressure_net"))
+    pred = 2.0 * s_recent - s_prior
     if net is not None and pred != 0:
         w = max(0.2, 1.0 + NH_ALPHA * net * (1 if pred > 0 else -1))
     else:
         w = 1.0
-    score = pred * w                          # 最終分數(%)
+    score = pred * w
 
-    # 方向
     if score >= NH_FLAT:
         d, arrow = 1, "↑"
     elif score <= -NH_FLAT:
@@ -124,7 +117,6 @@ def next_hour(s: dict) -> dict:
     else:
         d, arrow = 0, "→"
 
-    # 信心(看分數大小;買賣力道沒資料 → 高降一級,老實一點)
     mag = abs(score)
     if d == 0:
         conf = "低"
@@ -137,15 +129,14 @@ def next_hour(s: dict) -> dict:
     if net is None and conf == "高":
         conf = "中"
 
-    # 白話理由(轉向/延續 + 加速/趨緩 + 買賣力道)
     bits: list[str] = []
     if d != 0:
         same_dir = (s_recent >= 0) == (s_prior >= 0)
-        if not same_dir:                                  # 一正一反 = 剛翻
+        if not same_dir:
             bits.append("剛翻上" if s_recent > 0 else "剛翻下")
-        elif abs(s_recent) < abs(s_prior) * 0.6:          # 同向但減速 → 動能在退、要反轉
+        elif abs(s_recent) < abs(s_prior) * 0.6:
             bits.append("跌不動、要止跌" if s_recent < 0 else "漲不動、要回")
-        elif abs(s_recent) > abs(s_prior) * 1.15:         # 同向加速
+        elif abs(s_recent) > abs(s_prior) * 1.15:
             bits.append("越跌越快" if s_recent < 0 else "越漲越快")
         else:
             bits.append("延續往下" if s_recent < 0 else "延續往上")
@@ -158,6 +149,20 @@ def next_hour(s: dict) -> dict:
     lean = f"{arrow} 預測 {score:+.1f}%" if d != 0 else "→ 預測持平"
     return {"lean": lean, "dir": d, "conf": conf,
             "reason": "、".join(bits), "pred_pct": round(score, 2)}
+
+
+def next_hour(s: dict) -> dict:
+    """下一小時(10 分窗):預測下 10 分斜率。"""
+    return _predict_slope(_num(s.get("now_move_pct")),
+                          _num(s.get("prior_move_pct")),
+                          _num(s.get("pressure_net")))
+
+
+def next_hour_30(s: dict) -> dict:
+    """下一小時(30 分窗):預測下 30 分斜率(同算法、較長尺度)。"""
+    return _predict_slope(_num(s.get("now_move_pct_30")),
+                          _num(s.get("prior_move_pct_30")),
+                          _num(s.get("pressure_net_30")))
 
 
 # ===========================================================================
@@ -328,14 +333,17 @@ def all_three(snapshot: dict, *, is_holding: bool, headwind: bool = False,
     """一次算四盞 + 怎麼辦。snapshot 是抽好的此刻最新數字。pnl_pct=目前損益%(見好就收用)。
     (函式名沿用 all_three 不改,避免動到所有呼叫端;實際回四盞。)"""
     nh = next_hour(snapshot)
+    nh30 = next_hour_30(snapshot)
     tc = today_close(snapshot)
     tm = tomorrow(snapshot)
     td = three_day(snapshot)
     return {
         "next_hour": nh,
+        "next_hour_30": nh30,
         "today_close": tc,
         "tomorrow": tm,
         "three_day": td,
+        # 怎麼辦的「時機」仍用 10 分那盞(最即時);30 分這盞給你看/篩用
         "action": combined_action(nh, tc, tm, td, is_holding=is_holding,
                                   headwind=headwind, pnl_pct=pnl_pct),
     }
