@@ -1,4 +1,4 @@
-# 🔖最新批次 SRC-0608-1853 ｜ ⬆️【要上傳】dashboard.py — 來源/理由偵測容忍欄名(_source_of)+ 篩選/搜尋/卡片都用 + 收合顯示3盞箭頭
+# 🔖最新批次 SRC-0608-1853 ｜ ⬆️【要上傳】dashboard.py — 來源/理由容忍欄名(_source_of)+ 卡片三盞燈收進圓角面板/標籤對齊/預測上色(↑綠↓紅→灰)
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -1214,23 +1214,32 @@ def _detail_common(r: dict, action: str) -> None:
         st.markdown(line + (f'<br><span style="{mut};font-size:12px">資料時間 {dt}</span>'
                             if dt else ""), unsafe_allow_html=True)
 
-    # 2) 五盞預測:⚡下10分鐘 → ⏱️下30分鐘 → 🕒今天收盤 → 📊明天 → 📅三天後
-    #    每一盞「一律都顯示」,沒資料的就標 ⚪ 資料不足(不再整行隱藏)。
+    # 2) 三盞預測:⚡下10分鐘 → ⏱️下30分鐘 → 🕐下60分鐘
+    #    每一盞「一律都顯示」,沒資料就標 ⚪ 資料不足。收進圓角面板、標籤對齊、預測上色。
     def _fline(icon: str, name: str, f: dict) -> str:
         lean = f.get("lean", "") or "⚪ 資料不足"
         conf = f.get("conf", "")
         reason = f.get("reason", "")
-        conf_txt = (f'　<span style="{mut};font-size:12px">信心{conf}</span>'
-                    if conf and not lean.startswith("⚪") else "")
-        return (f'<div style="margin-top:7px">{icon} <b>{name}</b>　{lean}{conf_txt}'
-                + (f'<br><span style="{mut};font-size:13px">{reason}</span>' if reason else "")
-                + '</div>')
+        d = f.get("dir")
+        nodata = lean.startswith("⚪")
+        lcol = ("#9A9A95" if (nodata or d is None)
+                else "var(--color-text-success)" if d > 0
+                else "var(--color-text-danger)" if d < 0 else "#6B6A66")
+        conf_txt = (f'<span style="{mut};font-size:12px">信心{conf}</span>'
+                    if conf and not nodata else "")
+        head = ('<div style="display:flex;align-items:baseline;gap:8px;margin-top:5px">'
+                f'<span style="flex:0 0 86px;color:#3D3C39">{icon} <b>{name}</b></span>'
+                f'<span style="color:{lcol};font-weight:600">{lean}</span>{conf_txt}</div>')
+        rsn = (f'<div style="{mut};font-size:12px;margin:1px 0 0 94px">{reason}</div>'
+               if reason else "")
+        return head + rsn
 
-    st.markdown(
-        _fline("⚡", "下10分鐘", fc.get("next_hour", {}))
-        + _fline("⏱️", "下30分鐘", fc.get("next_hour_30", {}))
-        + _fline("🕐", "下60分鐘", fc.get("next_hour_60", {})),
-        unsafe_allow_html=True)
+    lights = (_fline("⚡", "下10分鐘", fc.get("next_hour", {}))
+              + _fline("⏱️", "下30分鐘", fc.get("next_hour_30", {}))
+              + _fline("🕐", "下60分鐘", fc.get("next_hour_60", {})))
+    st.markdown('<div style="margin-top:8px;background:rgba(127,127,127,.06);'
+                f'border-radius:10px;padding:7px 12px 9px">{lights}</div>',
+                unsafe_allow_html=True)
 
     # 3) 怎麼辦(用三盞預測算好的,已含大盤逆風提醒)
     act = action or fc.get("action") or ""
