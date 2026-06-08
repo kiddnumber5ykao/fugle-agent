@@ -1,4 +1,4 @@
-# 🔖最新批次 NH-0608-1158 ｜ ⬆️【要上傳】dashboard.py — 第4盞今天收盤 + 全更新按鈕改名(資訊+燈號)
+# 🔖最新批次 UI-0608-1208 ｜ ⬆️【要上傳】dashboard.py — 一打開看全部+燈號篩選+一行摘要(四盞燈箭頭)〔含第4盞+按鈕改名〕
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -955,35 +955,67 @@ def _render_totals() -> None:
     m3.metric("已實現損益(賣掉的)", f"{realized:+,.0f}")
 
 
+# 四盞燈:icon + fc 的 key。順序 = 下一小時 → 今天收盤 → 明天 → 三天後。
+_LAMP_ICONS = [("⚡", "next_hour"), ("🕒", "today_close"),
+               ("📊", "tomorrow"), ("📅", "three_day")]
+_LAMPS = {"下一小時": "next_hour", "今天收盤": "today_close",
+          "明天": "tomorrow", "三天後": "three_day"}
+
+
+def _arrow(f: dict) -> str:
+    """一盞燈 → 箭頭。資料不足 / 沒算到 → ·。"""
+    if not f or not f.get("lean") or str(f.get("lean")).startswith("⚪"):
+        return "·"
+    return {1: "↑", -1: "↓", 0: "→"}.get(int(f.get("dir", 0) or 0), "·")
+
+
+def _light_arrows(fc: dict) -> str:
+    """四盞燈一行箭頭,例如 ⚡↑🕒↑📊→📅↓。"""
+    return "".join(f"{ic}{_arrow(fc.get(k) or {})}" for ic, k in _LAMP_ICONS)
+
+
+def _light_filter(rows: list, key_prefix: str) -> list:
+    """頂部篩選列:選一盞燈 + 選方向 → 只留符合的股票。回篩完的 rows。"""
+    c1, c2 = st.columns(2)
+    lamp = c1.selectbox("篩選燈號", ["全部"] + list(_LAMPS),
+                        key=f"flt_lamp_{key_prefix}")
+    dirlab = c2.selectbox("方向", ["不限", "↑ 偏上", "↓ 偏下", "→ 說不準"],
+                          key=f"flt_dir_{key_prefix}", disabled=(lamp == "全部"))
+    if lamp == "全部" or dirlab == "不限":
+        return rows
+    want = {"↑ 偏上": 1, "↓ 偏下": -1, "→ 說不準": 0}[dirlab]
+    k = _LAMPS[lamp]
+    out = []
+    for r in rows:
+        f = _fc_get(r).get(k) or {}
+        if not f.get("lean") or str(f.get("lean")).startswith("⚪"):
+            continue
+        if int(f.get("dir", 0) or 0) == want:
+            out.append(r)
+    return out
+
+
 def _render_stock_list(rows: list[dict], card_fn, act_top: bool = True,
                        is_holding: bool = True) -> None:
-    """整頁三盞預測 + 怎麼辦,依「怎麼辦」的燈色分組(要注意的排最前)。
-    優先讀 Sheet 的「燈號快取」(背景每幾分鐘算好 → 秒開),沒有的才即時補算。"""
+    """一打開就看到全部股票 —— 每檔一行摘要(四盞燈箭頭 + 怎麼辦),可用『燈號』篩選。
+    優先讀 Sheet 的「燈號快取」(背景算好 → 秒開),沒有的才即時補算。"""
     st.session_state["_forecasts"] = _forecasts_from_cache_or_live(rows, is_holding)
+
+    rows = _light_filter(rows, "pos" if is_holding else "wl")
 
     def _act(r: dict) -> str:
         return _fc_get(r).get("action") or _g(r, "我該做啥", "綜合建議") or ""
 
-    def _hdr(a: str) -> str:        # 分組標題 = 「怎麼辦」本身(去掉大盤逆風那段)
-        return (a or "").split("　")[0].strip() or "⚪ 資料不足"
-
-    def _pri(a: str) -> int:        # 排序:🔴 要動的排最前 → 🟢 → 🟡 → ⚪
+    def _pri(a: str) -> int:        # 🔴 要動的排最前 → 🟢 → 🟡 → ⚪
         return {"🔴": 0, "🟢": 1, "🟡": 2}.get((a or "").strip()[:1], 3)
 
-    rows = sorted(rows, key=lambda r: (_pri(_act(r)), _hdr(_act(r))))
-    order, groups = [], {}
+    rows = sorted(rows, key=lambda r: _pri(_act(r)))
+    st.caption(f"共 {len(rows)} 檔")
+    if not rows:
+        st.info("沒有符合這個燈號條件的股票。")
+        return
     for r in rows:
-        lab = _hdr(_act(r))
-        if lab not in groups:
-            groups[lab] = []
-            order.append(lab)
-        groups[lab].append(r)
-    for lab in order:
-        with st.expander(f"{lab}（{len(groups[lab])} 檔）", expanded=lab.startswith("🔴")):
-            st.markdown('<div class="gyh-card">', unsafe_allow_html=True)
-            for r in groups[lab]:
-                card_fn(r)
-            st.markdown('</div>', unsafe_allow_html=True)
+        card_fn(r)
 
 
 def _holding_card(r: dict) -> None:
@@ -993,9 +1025,9 @@ def _holding_card(r: dict) -> None:
     action = fc.get("action") or _g(r, "我該做啥", "綜合建議")
     pnl = fc.get("pnl") or {}
     pct = pnl.get("損益%")
-    pct_txt = f"　{'賺' if pct >= 0 else '賠'} {abs(pct):.1f}%" if pct is not None else ""
+    pct_txt = f" {'賺' if pct >= 0 else '賠'}{abs(pct):.0f}%" if pct is not None else ""
     _dot = {"上市": "🔵", "上櫃": "🟠", "興櫃": "⚪"}.get(_g(r, "市場別") or fc.get("market") or "", "")
-    label = (f"{_dot} " if _dot else "") + f"{code} {name}{pct_txt}"
+    label = (f"{_dot} " if _dot else "") + f"{code} {name}{pct_txt}　{_light_arrows(fc)}　{_action_icon(action)}"
     with st.expander(label):
         _detail_common(r, action)
 
@@ -1003,12 +1035,10 @@ def _holding_card(r: dict) -> None:
 def _watch_card(r: dict) -> None:
     code = _g(r, "代號", "symbol")
     name = _g(r, "名稱", "name")
-    reason = _g(r, "追蹤理由")
     fc = _fc_get(r)
     action = fc.get("action") or _g(r, "我該做啥", "綜合建議")
-    tag = f"（{reason}）" if reason else ""
     _dot = {"上市": "🔵", "上櫃": "🟠", "興櫃": "⚪"}.get(_g(r, "市場別") or fc.get("market") or "", "")
-    label = (f"{_dot} " if _dot else "") + f"{code} {name}{tag}"
+    label = (f"{_dot} " if _dot else "") + f"{code} {name}　{_light_arrows(fc)}　{_action_icon(action)}"
     with st.expander(label):
         _detail_common(r, action)
 
