@@ -1,4 +1,4 @@
-# 🔖最新批次 SRC-0608-1553 ｜ ⬆️【要上傳】dashboard.py — 搜尋含「追蹤理由」(名稱+來源+追蹤理由一起搜)+ 收合顯示3盞箭頭 + 只顯示3盞
+# 🔖最新批次 SRC-0608-1558 ｜ ⬆️【要上傳】dashboard.py — 篩選列多加「追蹤理由/來源」下拉 + 搜尋含追蹤理由 + 收合顯示3盞箭頭
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -1009,32 +1009,51 @@ def _light_arrows(fc: dict) -> str:
 
 
 def _light_filter(rows: list, key_prefix: str) -> list:
-    """每一盞燈各一個篩選(不限/↑/↓/→),多盞同時用 = 而且(AND)。回篩完的 rows。"""
+    """篩選:每盞燈各一個(不限/↑/↓/→)+ 追蹤理由/來源;多條件同時 = 而且(AND)。"""
     def cur(k):
         return st.session_state.get(f"flt_{key_prefix}_{k}", "不限")
 
+    def _src(r):
+        return _g(r, "來源") or _g(r, "追蹤理由") or ""
+
+    sources = sorted({_src(r) for r in rows if _src(r)})
+    src_key = f"flt_{key_prefix}_src"
+    # 防呆:存的值若不在目前選項裡(例如那檔被刪了)→ 重設成全部,避免 selectbox 報錯
+    if st.session_state.get(src_key, "全部") not in (["全部"] + sources):
+        st.session_state[src_key] = "全部"
+    src_cur = st.session_state.get(src_key, "全部")
+
     active = [f"{lab}{cur(k)[0]}" for lab, k in _LAMPS.items() if _DIRS.get(cur(k)) is not None]
-    title = "🔦 用燈號篩選" + ("：" + "、".join(active) if active else "（全部）")
+    if src_cur != "全部":
+        active.append(f"理由={src_cur}")
+    title = "🔦 篩選" + ("：" + "、".join(active) if active else "（全部）")
     with st.expander(title, expanded=bool(active)):
         cols = st.columns(2)
         for i, (lab, k) in enumerate(_LAMPS.items()):
             cols[i % 2].selectbox(lab, list(_DIRS), key=f"flt_{key_prefix}_{k}")
+        if sources:
+            st.selectbox("追蹤理由 / 來源", ["全部"] + sources, key=src_key)
 
+    out = list(rows)
+    # 燈號(AND)
     wants = {k: _DIRS[cur(k)] for lab, k in _LAMPS.items() if _DIRS[cur(k)] is not None}
-    if not wants:
-        return rows
-    out = []
-    for r in rows:
-        fc = _fc_get(r)
-        keep = True
-        for k, want in wants.items():
-            f = fc.get(k) or {}
-            if (not f.get("lean")) or str(f.get("lean")).startswith("⚪") \
-                    or int(f.get("dir", 0) or 0) != want:
-                keep = False
-                break
-        if keep:
-            out.append(r)
+    if wants:
+        kept = []
+        for r in out:
+            fc = _fc_get(r)
+            ok = True
+            for k, want in wants.items():
+                f = fc.get(k) or {}
+                if (not f.get("lean")) or str(f.get("lean")).startswith("⚪") \
+                        or int(f.get("dir", 0) or 0) != want:
+                    ok = False
+                    break
+            if ok:
+                kept.append(r)
+        out = kept
+    # 追蹤理由 / 來源
+    if src_cur != "全部":
+        out = [r for r in out if _src(r) == src_cur]
     return out
 
 
