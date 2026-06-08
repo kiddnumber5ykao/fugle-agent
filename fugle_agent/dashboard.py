@@ -1,4 +1,4 @@
-# 🔖最新批次 SRC-0608-1853 ｜ ⬆️【要上傳】dashboard.py — 來源/理由容忍欄名(_source_of)+ 卡片三盞燈收進圓角面板/標籤對齊/預測上色(↑綠↓紅→灰)
+# 🔖最新批次 SRC-0608-2032 ｜ ⬆️【要上傳】dashboard.py — 一格多來源(、隔開)篩選/搜尋皆支援 + 來源容忍欄名 + 三盞燈圓角面板/對齊/上色
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -73,6 +73,14 @@ def _source_of(row: dict) -> str:
             if s:
                 return s
     return ""
+
+
+def _split_sources(s) -> list[str]:
+    """一格多個來源拆開:支援、,，/;；換行 等分隔。'照哥、阿明' → ['照哥','阿明']。"""
+    s = str(s or "")
+    for d in "、,，/;；\n\t ":
+        s = s.replace(d, "|")
+    return [x.strip() for x in s.split("|") if x.strip()]
 
 
 def _num(v) -> float | None:
@@ -1028,10 +1036,10 @@ def _light_filter(rows: list, key_prefix: str) -> list:
     def cur(k):
         return st.session_state.get(f"flt_{key_prefix}_{k}", "不限")
 
-    def _src(r):
-        return _source_of(r)
+    def _src_set(r):
+        return set(_split_sources(_source_of(r)))   # 一檔可能多個來源
 
-    sources = sorted({_src(r) for r in rows if _src(r)})
+    sources = sorted({s for r in rows for s in _src_set(r)})
     src_key = f"flt_{key_prefix}_src"
     # 防呆:存的值若不在目前選項裡(例如那檔被刪了)→ 重設成全部,避免 selectbox 報錯
     if st.session_state.get(src_key, "全部") not in (["全部"] + sources):
@@ -1066,9 +1074,9 @@ def _light_filter(rows: list, key_prefix: str) -> list:
             if ok:
                 kept.append(r)
         out = kept
-    # 追蹤理由 / 來源
+    # 追蹤理由 / 來源(這檔的來源「包含」所選 = 留下;支援一格多來源)
     if src_cur != "全部":
-        out = [r for r in out if _src(r) == src_cur]
+        out = [r for r in out if src_cur in _src_set(r)]
     return out
 
 
