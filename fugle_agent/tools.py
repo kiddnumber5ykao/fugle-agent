@@ -1,4 +1,4 @@
-# 🔖最新批次 4L-0608-1454 ｜ ⬆️【要上傳】tools.py — 加日線斜率(day_recent/prior_pct,給「一天」盞)〔含先前光學bug修正〕
+# 🔖最新批次 KEEP-0608-1520 ｜ ⬆️【要上傳】tools.py — 燈號快取「算不出就沿用上一次有資料的」(盤後也看得到最近一筆)〔含日線斜率+光學bug修正〕
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -3755,8 +3755,17 @@ def write_lights_cache(scope: str = "all") -> dict:
     from . import live_forecast
     out = {"ok": True, "positions": 0, "watchlist": 0}
 
+    # 五盞燈的 key(沿用上次用)
+    _LIGHT_KEYS = ("next_hour", "next_hour_30", "next_hour_60", "next_day",
+                   "today_close", "tomorrow", "three_day")
+
+    def _has_data(light) -> bool:
+        return bool(isinstance(light, dict) and light.get("lean")
+                    and not str(light.get("lean")).startswith("⚪"))
+
     def _run(rows: list, is_holding: bool) -> list[dict]:
         items = []
+        old_cache: dict[str, dict] = {}
         for r in rows:
             if not isinstance(r, dict) or r.get("_error"):
                 continue
@@ -3766,15 +3775,28 @@ def write_lights_cache(scope: str = "all") -> dict:
             items.append((sym,
                           int(_num_safe(r.get("股數")) or 0),
                           float(_num_safe(r.get("總成本")) or 0.0)))
+            # 記住上一次算好的燈號 → 這次某盞算不出來(盤後抓不到盤中資料)就沿用它
+            try:
+                raw = r.get("燈號快取")
+                if raw:
+                    old_cache[sym] = json.loads(raw)
+            except Exception:
+                pass
         if not items:
             return []
         try:
             fcs = live_forecast.prefetch(items, is_holding=is_holding)
         except Exception as e:
-            print(f"⚠️ 算三盞燈失敗: {e}", flush=True)
+            print(f"⚠️ 算燈號失敗: {e}", flush=True)
             return []
         payloads = []
         for sym, fc in fcs.items():
+            # 「無時無刻都看得到最近一筆」:這次資料不足的那幾盞 → 沿用上一次有資料的
+            old = old_cache.get(sym)
+            if isinstance(old, dict):
+                for k in _LIGHT_KEYS:
+                    if not _has_data(fc.get(k)) and _has_data(old.get(k)):
+                        fc[k] = old[k]
             try:
                 blob = json.dumps(fc, ensure_ascii=False, default=str)
             except Exception:
