@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-08 08:10】full_update.yml — 新增 lights job:每次全更新(新交易/新追蹤)順手重算燈號快取
+# 🔖最新批次 NH-0608-1158 ｜ ⬆️【要上傳】full_update.yml — 新增 lights job:每次全更新順手重算燈號快取
 name: 全更新 (重算+技術+基本面)
 run-name: 全更新 [${{ inputs.scope || 'all' }}]
 
