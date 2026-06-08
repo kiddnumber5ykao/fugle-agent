@@ -1,4 +1,4 @@
-# 🔖最新批次 UI-0608-1208 ｜ ⬆️【要上傳】dashboard.py — 一打開看全部+燈號篩選+一行摘要(四盞燈箭頭)〔含第4盞+按鈕改名〕
+# 🔖最新批次 UI-0608-1213 ｜ ⬆️【要上傳】dashboard.py — 看全部+燈號篩選+一行摘要(四盞燈箭頭)+追蹤顯示來源〔含第4盞+按鈕改名〕
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -1038,7 +1038,9 @@ def _watch_card(r: dict) -> None:
     fc = _fc_get(r)
     action = fc.get("action") or _g(r, "我該做啥", "綜合建議")
     _dot = {"上市": "🔵", "上櫃": "🟠", "興櫃": "⚪"}.get(_g(r, "市場別") or fc.get("market") or "", "")
-    label = (f"{_dot} " if _dot else "") + f"{code} {name}　{_light_arrows(fc)}　{_action_icon(action)}"
+    src = _g(r, "來源", "追蹤理由")          # 來源:優先讀「來源」欄,沒有就讀「追蹤理由」
+    src_txt = f" 〔{src}〕" if src else ""
+    label = (f"{_dot} " if _dot else "") + f"{code} {name}{src_txt}　{_light_arrows(fc)}　{_action_icon(action)}"
     with st.expander(label):
         _detail_common(r, action)
 
