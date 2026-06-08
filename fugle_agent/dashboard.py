@@ -1,4 +1,4 @@
-# 🔖最新批次 30M-0608-1420 ｜ ⬆️【要上傳】dashboard.py — 燈號改名(下10分鐘/下30分鐘)/每盞燈各自篩選/摘要拿掉箭頭/追蹤顯示來源
+# 🔖最新批次 30M-0608-1425 ｜ ⬆️【要上傳】dashboard.py — 卡片5盞固定都顯示(沒資料標⚪)/燈號改名/每盞燈各自篩選/摘要無箭頭/追蹤來源
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -1134,14 +1134,14 @@ def _detail_common(r: dict, action: str) -> None:
         st.markdown(line + (f'<br><span style="{mut};font-size:12px">資料時間 {dt}</span>'
                             if dt else ""), unsafe_allow_html=True)
 
-    # 2) 四盞預測:⚡下一小時 → 🕒今天收盤 → 📊明天 → 📅三天後
+    # 2) 五盞預測:⚡下10分鐘 → ⏱️下30分鐘 → 🕒今天收盤 → 📊明天 → 📅三天後
+    #    每一盞「一律都顯示」,沒資料的就標 ⚪ 資料不足(不再整行隱藏)。
     def _fline(icon: str, name: str, f: dict) -> str:
-        lean = f.get("lean", "")
-        if not lean:
-            return ""
+        lean = f.get("lean", "") or "⚪ 資料不足"
         conf = f.get("conf", "")
         reason = f.get("reason", "")
-        conf_txt = f'　<span style="{mut};font-size:12px">信心{conf}</span>' if conf else ""
+        conf_txt = (f'　<span style="{mut};font-size:12px">信心{conf}</span>'
+                    if conf and not lean.startswith("⚪") else "")
         return (f'<div style="margin-top:7px">{icon} <b>{name}</b>　{lean}{conf_txt}'
                 + (f'<br><span style="{mut};font-size:13px">{reason}</span>' if reason else "")
                 + '</div>')
