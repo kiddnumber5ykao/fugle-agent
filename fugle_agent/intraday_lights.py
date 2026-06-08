@@ -1,4 +1,4 @@
-# 🔖最新批次 NH-0608-1158 ｜ ⬆️【要上傳】intraday_lights.py — 買賣力道最近N分 + turn_and_accel 回傳前半% + pressure_net
+# 🔖最新批次 30M-0608-1436 ｜ ⬆️【要上傳】intraday_lights.py — 資料不夠就回資料不足(不硬填,需窗覆蓋8成)
 """盤中即時燈號 — 純計算核心。
 
 三盞燈的分工(從最即時 → 最穩):
@@ -361,8 +361,9 @@ def turn_and_accel(series: list[tuple[float, float]] | None,
     last_t = pts[-1][0]
     cutoff = last_t - window_min * 60
     window = [(t, p) for t, p in pts if t >= cutoff]
-    if len(window) < 3:
-        window = pts[-3:]
+    # 不硬填:窗內點數太少,或資料還沒覆蓋到這個時間窗的 8 成 → 回資料不足(寧缺勿假)
+    if len(window) < 3 or (window[-1][0] - window[0][0]) < window_min * 60 * 0.8:
+        return (None, None, None, None)
     mid = len(window) // 2
     first_p, mid_p, last_p = window[0][1], window[mid][1], window[-1][1]
     recent = (last_p / mid_p - 1) * 100 if mid_p else None     # 後半:現在往哪走
