@@ -1,4 +1,4 @@
-# 🔖最新批次 4L-0608-1454 ｜ ⬆️【要上傳】dashboard.py — 只顯示4盞(下10/下30/下60/一天)、其餘先隱藏〔含先前所有 UI 改動〕
+# 🔖最新批次 3L-0608-1533 ｜ ⬆️【要上傳】dashboard.py — 只顯示3盞(下10/下30/下60),一天先隱藏(背景仍算)〔含先前所有 UI 改動〕
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -611,7 +611,6 @@ def _render_forecast_freshness() -> None:
         ("🔮", "下10分鐘", nh),
         ("⏱️", "下30分鐘", nh),
         ("🕐", "下60分鐘", nh),
-        ("📅", "一天", td),
     ]
     html = ""
     for icon, name, fresh in rows:
@@ -957,7 +956,7 @@ def _render_totals() -> None:
 
 # 五盞燈:顯示名 → fc 的 key。順序 = 下一小時(10分/30分)→ 今天收盤 → 明天 → 三天後。
 _LAMPS = {"下10分鐘": "next_hour", "下30分鐘": "next_hour_30",
-          "下60分鐘": "next_hour_60", "一天": "next_day"}
+          "下60分鐘": "next_hour_60"}
 _DIRS = {"不限": None, "↑ 偏上": 1, "↓ 偏下": -1, "→ 說不準": 0}
 
 
@@ -1148,8 +1147,7 @@ def _detail_common(r: dict, action: str) -> None:
     st.markdown(
         _fline("⚡", "下10分鐘", fc.get("next_hour", {}))
         + _fline("⏱️", "下30分鐘", fc.get("next_hour_30", {}))
-        + _fline("🕐", "下60分鐘", fc.get("next_hour_60", {}))
-        + _fline("📅", "一天", fc.get("next_day", {})),
+        + _fline("🕐", "下60分鐘", fc.get("next_hour_60", {})),
         unsafe_allow_html=True)
 
     # 3) 怎麼辦(用三盞預測算好的,已含大盤逆風提醒)
