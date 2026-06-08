@@ -1,4 +1,4 @@
-# 🔖最新批次 SRC-0608-1558 ｜ ⬆️【要上傳】dashboard.py — 篩選列多加「追蹤理由/來源」下拉 + 搜尋含追蹤理由 + 收合顯示3盞箭頭
+# 🔖最新批次 SRC-0608-1853 ｜ ⬆️【要上傳】dashboard.py — 來源/理由偵測容忍欄名(_source_of)+ 篩選/搜尋/卡片都用 + 收合顯示3盞箭頭
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -55,6 +55,23 @@ def _g(row: dict, *names: str) -> str:
         v = row.get(n)
         if v is not None and str(v).strip():
             return str(v).strip()
+    return ""
+
+
+def _source_of(row: dict) -> str:
+    """抓這檔的『來源 / 追蹤理由』值。容忍欄名變化:先試標準欄名,
+    再掃任何「欄名含『理由』或『來源』」的欄(處理帶括號/空白/別名的標題)。"""
+    if not isinstance(row, dict):
+        return ""
+    for key in ("來源", "追蹤理由"):
+        v = row.get(key)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    for k, v in row.items():
+        if v is not None and ("理由" in str(k) or "來源" in str(k)):
+            s = str(v).strip()
+            if s:
+                return s
     return ""
 
 
@@ -710,10 +727,8 @@ def _render_search() -> None:
         q = code.lower()
 
         def _hit(r: dict) -> bool:
-            # 名稱 + 來源 + 追蹤理由 三個欄位都一起搜(任何一個含關鍵字就算符合)
-            blob = (str(_g(r, "名稱", "name")) + " "
-                    + str(_g(r, "來源")) + " "
-                    + str(_g(r, "追蹤理由"))).lower()
+            # 名稱 + 來源/追蹤理由(容忍欄名)一起搜
+            blob = (str(_g(r, "名稱", "name")) + " " + _source_of(r)).lower()
             return q in blob
 
         try:
@@ -1014,7 +1029,7 @@ def _light_filter(rows: list, key_prefix: str) -> list:
         return st.session_state.get(f"flt_{key_prefix}_{k}", "不限")
 
     def _src(r):
-        return _g(r, "來源") or _g(r, "追蹤理由") or ""
+        return _source_of(r)
 
     sources = sorted({_src(r) for r in rows if _src(r)})
     src_key = f"flt_{key_prefix}_src"
@@ -1100,7 +1115,7 @@ def _watch_card(r: dict) -> None:
     fc = _fc_get(r)
     action = fc.get("action") or _g(r, "我該做啥", "綜合建議")
     _dot = {"上市": "🔵", "上櫃": "🟠", "興櫃": "⚪"}.get(_g(r, "市場別") or fc.get("market") or "", "")
-    src = _g(r, "來源", "追蹤理由")          # 來源:優先讀「來源」欄,沒有就讀「追蹤理由」
+    src = _source_of(r)                      # 來源/追蹤理由(容忍欄名變化)
     src_txt = f" 〔{src}〕" if src else ""
     label = (f"{_dot} " if _dot else "") + f"{code} {name}{src_txt}　{_light_arrows(fc)}"
     with st.expander(label):
