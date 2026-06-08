@@ -1,4 +1,4 @@
-# 🔖最新批次 30M-0608-1411 ｜ ⬆️【要上傳】dashboard.py — 摘要拿掉箭頭/每盞燈各自篩選/加「30分」盞/追蹤顯示來源〔含先前全部 UI 改動〕
+# 🔖最新批次 30M-0608-1420 ｜ ⬆️【要上傳】dashboard.py — 燈號改名(下10分鐘/下30分鐘)/每盞燈各自篩選/摘要拿掉箭頭/追蹤顯示來源
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -608,8 +608,8 @@ def _render_forecast_freshness() -> None:
     td = (f"日線 {daily_t}　＋ 外資 {daily_t}" if cd
           else "日線昨收 ＋ 外資")
     rows = [
-        ("🔮", "下一小時(10分)", nh),
-        ("⏱️", "下一小時(30分)", nh),
+        ("🔮", "下10分鐘", nh),
+        ("⏱️", "下30分鐘", nh),
         ("🕒", "今天收盤", tc),
         ("🌤️", "明天", tm),
         ("📅", "三天後", td),
@@ -957,7 +957,7 @@ def _render_totals() -> None:
 
 
 # 五盞燈:顯示名 → fc 的 key。順序 = 下一小時(10分/30分)→ 今天收盤 → 明天 → 三天後。
-_LAMPS = {"下一小時(10分)": "next_hour", "下一小時(30分)": "next_hour_30",
+_LAMPS = {"下10分鐘": "next_hour", "下30分鐘": "next_hour_30",
           "今天收盤": "today_close", "明天": "tomorrow", "三天後": "three_day"}
 _DIRS = {"不限": None, "↑ 偏上": 1, "↓ 偏下": -1, "→ 說不準": 0}
 
@@ -1147,8 +1147,8 @@ def _detail_common(r: dict, action: str) -> None:
                 + '</div>')
 
     st.markdown(
-        _fline("⚡", "下一小時(10分)", fc.get("next_hour", {}))
-        + _fline("⏱️", "下一小時(30分)", fc.get("next_hour_30", {}))
+        _fline("⚡", "下10分鐘", fc.get("next_hour", {}))
+        + _fline("⏱️", "下30分鐘", fc.get("next_hour_30", {}))
         + _fline("🕒", "今天收盤", fc.get("today_close", {}))
         + _fline("📊", "明天", fc.get("tomorrow", {}))
         + _fline("📅", "三天後", fc.get("three_day", {})),

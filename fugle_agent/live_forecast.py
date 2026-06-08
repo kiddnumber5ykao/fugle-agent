@@ -1,4 +1,4 @@
-# 🔖最新批次 30M-0608-1411 ｜ ⬆️【要上傳】live_forecast.py — snapshot 補 30 分窗(now/prior_move_pct_30 + pressure_net_30)
+# 🔖最新批次 30M-0608-1420 ｜ ⬆️【要上傳】live_forecast.py — snapshot 補 30 分窗(now/prior_move_pct_30 + pressure_net_30)
 """即時組裝層 —— 打開頁面當下,把每檔的「此刻最新數字」抓齊,餵給 forecasts 引擎。
 
 分工:
