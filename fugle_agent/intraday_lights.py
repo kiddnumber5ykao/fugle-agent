@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-05 10:04】intraday_lights.py — 盤中微結構 + 剛轉向偵測(turn_and_accel)
+# 🔖最新批次 NH-0608-1158 ｜ ⬆️【要上傳】intraday_lights.py — 買賣力道最近N分 + turn_and_accel 回傳前半% + pressure_net
 """盤中即時燈號 — 純計算核心。
 
 三盞燈的分工(從最即時 → 最穩):
@@ -232,12 +232,30 @@ def vwap_pct_from_candles(candles: dict | None, last_price: float | None) -> Opt
     return (last_price / vwap - 1) * 100
 
 
-def pressure_from_ticks(ticks: dict | None) -> Optional[int]:
+def pressure_from_ticks(ticks: dict | None,
+                        window_min: float | None = None) -> Optional[int]:
     """從盤中逐筆的「主動買/主動賣」標記算買賣力道。
-    tickType 1=主動買、2=主動賣(Fugle 慣例)。回 -1/0/1;沒資料回 None。"""
+    tickType 1=主動買、2=主動賣(Fugle 慣例)。回 -1/0/1;沒資料回 None。
+    window_min 有給 → 只算「最近這幾分鐘」的逐筆(跟走勢/剛轉向同一個時間窗);
+    沒給 → 用全部傳進來的逐筆(舊行為)。最近窗內筆數太少(<3)→ 回 None(不表態,避免雜訊)。"""
     rows = (ticks or {}).get("data") if isinstance(ticks, dict) else None
     if not rows:
         return None
+    # 只留最近 window_min 分鐘的逐筆(用每筆成交時間篩,跟走勢票對齊)
+    if window_min:
+        timed = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            t = _to_epoch_sec(r.get("time") or r.get("date") or r.get("timestamp"))
+            if t is not None:
+                timed.append((t, r))
+        if timed:
+            last_t = max(t for t, _ in timed)
+            cutoff = last_t - window_min * 60
+            rows = [r for t, r in timed if t >= cutoff]
+        if len(rows) < 3:               # 最近這幾分鐘成交太少 → 不表態
+            return None
     buy = sell = 0.0
     for r in rows:
         if not isinstance(r, dict):
@@ -257,6 +275,43 @@ def pressure_from_ticks(ticks: dict | None) -> Optional[int]:
     if net <= -0.15:
         return -1
     return 0
+
+
+def pressure_net_from_ticks(ticks: dict | None,
+                            window_min: float | None = None) -> Optional[float]:
+    """內外盤『連續淨值』float ∈ [-1,1] —(主動買量 − 主動賣量)/ 總量。給「下一小時」加權用,
+    不做 ±0.15 離散化。window_min 有給 → 只算最近這幾分鐘(跟走勢同窗);窗內筆數太少(<3)或沒資料 → None。"""
+    rows = (ticks or {}).get("data") if isinstance(ticks, dict) else None
+    if not rows:
+        return None
+    if window_min:
+        timed = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            t = _to_epoch_sec(r.get("time") or r.get("date") or r.get("timestamp"))
+            if t is not None:
+                timed.append((t, r))
+        if timed:
+            last_t = max(t for t, _ in timed)
+            cutoff = last_t - window_min * 60
+            rows = [r for t, r in timed if t >= cutoff]
+        if len(rows) < 3:
+            return None
+    buy = sell = 0.0
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        tt = r.get("tickType")
+        sz = _f(r.get("size")) or _f(r.get("volume")) or 1.0
+        if tt in (1, "1"):
+            buy += sz
+        elif tt in (2, "2"):
+            sell += sz
+    tot = buy + sell
+    if tot <= 0:
+        return None
+    return (buy - sell) / tot
 
 
 def now_move_and_accel(series: list[tuple[float, float]] | None,
@@ -290,19 +345,19 @@ def now_move_and_accel(series: list[tuple[float, float]] | None,
 
 
 def turn_and_accel(series: list[tuple[float, float]] | None,
-                   window_min: int = 30) -> tuple[Optional[float], Optional[int], Optional[int]]:
-    """抓『剛開始要往上/往下走』。把近 window_min 分鐘切成「前半 / 後半」:
-      - 後半漲跌%(最近約一半時間,例如近15分)→ 當「現在往哪走」的主方向,
-        比『整段淨變化』更早抓到轉向。
+                   window_min: int = 30
+                   ) -> tuple[Optional[float], Optional[float], Optional[int], Optional[int]]:
+    """把近 window_min 分鐘切成「前半 / 後半」,回 (後半漲跌%, 前半漲跌%, turn, accel)。
+      - 後半%(=最近一半時間)= 現在往哪走(速度);前半% = 上一段(給外推用)。
       - turn:後半往上、前半沒往上 → +1(剛翻上);後半往下、前半沒往下 → -1(剛翻下);否則 0。
       - accel:後半幅度明顯大於前半且同向 → +1(越走越快);明顯變小 → -1(鈍化);否則 0。
-    回 (後半漲跌%, turn, accel)。資料不足回 (None, None, None)。"""
+    資料不足回 (None, None, None, None)。"""
     if not series:
-        return (None, None, None)
+        return (None, None, None, None)
     pts = sorted([(t, p) for t, p in series if t is not None and p is not None],
                  key=lambda x: x[0])
     if len(pts) < 3:
-        return (None, None, None)
+        return (None, None, None, None)
     last_t = pts[-1][0]
     cutoff = last_t - window_min * 60
     window = [(t, p) for t, p in pts if t >= cutoff]
@@ -328,7 +383,7 @@ def turn_and_accel(series: list[tuple[float, float]] | None,
             accel = -1
         else:
             accel = 0
-    return (recent, turn, accel)
+    return (recent, prior, turn, accel)
 
 
 def _to_epoch_sec(v: Any) -> Optional[float]:

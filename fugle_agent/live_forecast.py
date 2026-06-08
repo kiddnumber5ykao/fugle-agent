@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-06 09:10】live_forecast.py — 即時組裝 + 上市/上櫃標示
+# 🔖最新批次 NH-0608-1158 ｜ ⬆️【要上傳】live_forecast.py — snapshot 補 prior_move_pct / pressure_net(下一小時預測斜率用)
 """即時組裝層 —— 打開頁面當下,把每檔的「此刻最新數字」抓齊,餵給 forecasts 引擎。
 
 分工:
@@ -18,6 +18,12 @@ from typing import Any, Optional
 
 from . import forecasts
 from . import intraday_lights as il
+
+# 「下一小時」第 1~4 點統一用的時間窗:最近 N 分鐘。
+#   • 第1點 走勢 = 最近 N 分鐘漲跌%
+#   • 第3點 剛轉向 = 最近 N 分鐘 vs 前 N 分鐘(所以 turn_and_accel 吃 2N 的總窗)
+#   • 第4點 買賣力道 = 最近 N 分鐘的逐筆內外盤
+NH_RECENT_MIN = 10
 
 
 def _sign(x: Any) -> Optional[int]:
@@ -146,7 +152,8 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
         low = il._f(quote.get("lowPrice")) or il._f(quote.get("low"))
         candles = c.intraday_candles(sym) or {}
         series = il.series_from_candles(candles)
-        ticks = c.intraday_ticks(sym, limit=120) or {}
+        # 多抓一點逐筆,確保「最近 N 分鐘」在熱門股也涵蓋得到(之後在 pressure 裡用時間篩)
+        ticks = c.intraday_ticks(sym, limit=600) or {}
         if len(series) < 2:
             series = il.series_from_ticks(ticks)
     except Exception:
@@ -165,7 +172,7 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
 
     # 下一小時的方向 = 抓「剛開始要往上/往下走」:把近20分切前後半,用後半(最近約10分)
     # 的方向當主軸,再加一個『剛轉向』判斷。不是跟一開盤比、也不是看整段淨變化。
-    now_move, turn, accel = il.turn_and_accel(series, window_min=20)
+    now_move, prior_move, turn, accel = il.turn_and_accel(series, window_min=NH_RECENT_MIN * 2)
     close_strength = None
     if high is not None and low is not None and high > low and last_price is not None:
         close_strength = max(0.0, min(1.0, (last_price - low) / (high - low)))
@@ -174,10 +181,13 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
         return sig.get(key) if sig.get("ok") else None
 
     snap = {
-        # 🔮 下一小時
-        "now_move_pct": now_move,       # 後半(最近約10分)漲跌% = 現在往哪走
-        "turn":         turn,           # 剛轉向:+1剛翻上 / -1剛翻下 / 0
-        "pressure":     il.pressure_from_ticks(ticks),   # 買賣力道(內外盤)— 正式一票
+        # ⚡ 下一小時(預測下 N 分斜率 = 2×後 − 前,再乘買賣力道權重)
+        "now_move_pct":   now_move,     # 後10分%(=現在速度;today_close 也用)
+        "prior_move_pct": prior_move,   # 前10分%(外推用)
+        "pressure_net":   il.pressure_net_from_ticks(ticks, window_min=NH_RECENT_MIN),  # 內外盤連續淨值 -1~1
+        # 下面這幾個舊鍵保留(today_close / 防呆用,不影響新算法)
+        "turn":         turn,
+        "pressure":     il.pressure_from_ticks(ticks, window_min=NH_RECENT_MIN),
         "vol_ratio":    _sg("today_vol_ratio"),
         "accel":        accel,
         "mkt_now":      msnap.get("mkt_today"),

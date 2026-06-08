@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-08 08:25】forecasts.py — 新增第4盞「今天收盤」(介於下一小時與明天之間)
+# 🔖最新批次 NH-0608-1158 ｜ ⬆️【要上傳】forecasts.py — 第4盞「今天收盤」+ 下一小時改「算預測斜率」(不投票)
 """四盞預測:下一小時 / 今天收盤 / 明天 / 三天後 —— 用「同一份此刻最新快照」算。
 
 設計原則:
@@ -32,6 +32,12 @@ TD_MA_DN = -2.0
 RSI_OVERBOUGHT = 72   # 過熱 → 偏空一票(物極必反)
 RSI_OVERSOLD = 30     # 超賣 → 偏多一票
 TAKE_PROFIT_MIN = 6.0   # 持股賺超過這% + 動能轉弱 → 提示「見好就收」(短線設定,可調)
+
+# ── 下一小時(預測下 N 分斜率;不投票,算一個數字)可調參數 ──
+NH_ALPHA   = 0.5    # 買賣力道(內外盤淨值 -1~1)對預測的加權強度
+NH_FLAT    = 0.10   # |預測分數%| 小於這個 → 視為持平/說不準
+NH_CONF_HI = 0.50   # |分數| ≥ → 信心「高」
+NH_CONF_MID = 0.20  # |分數| ≥ → 信心「中」
 
 
 def _num(v: Any) -> Optional[float]:
@@ -91,27 +97,67 @@ def _tally(votes: list[tuple[Optional[int], str, str]]) -> dict:
 # ===========================================================================
 
 def next_hour(s: dict) -> dict:
-    mv = _num(s.get("now_move_pct"))       # 後半(最近約15分)漲跌% = 現在往哪走
-    vr = _num(s.get("vol_ratio"))
-    move_vote = _vote_threshold(mv, NH_MOVE_UP, NH_MOVE_DN)
-    turn_vote = _as_vote(s.get("turn"))    # 剛轉向(+1剛翻上 / -1剛翻下)
-    # 量只在「有方向時」才強化:放量 + 在漲 → +1;放量 + 在跌 → -1
-    vol_vote = None
-    if vr is not None and vr >= VOL_BIG and move_vote:
-        vol_vote = 1 if move_vote > 0 else -1
-    # 方向 = 抓「剛開始要往上/往下走」:用最近約15分的走勢(move,雙票主導)+『剛轉向』,
-    # 配買賣力道、量、加速、大盤。不看「站上/跌破均價線」(那是跟整天平均比、接近跟開盤比,
-    # 會把方向往整天漲跌拉,不符合『剛轉向』的意思)。
-    votes = [
-        (move_vote,                     "最近在往上走",   "最近在往下走"),
-        (move_vote,                     "最近在往上走",   "最近在往下走"),   # 走勢雙票,主導方向
-        (turn_vote,                     "剛開始往上翻",   "剛開始往下翻"),
-        (_as_vote(s.get("pressure")),   "買盤較多",       "賣壓較重"),
-        (vol_vote,                      "有量挺",         "量挺著跌"),
-        (_as_vote(s.get("accel")),      "越走越快",       "走勢鈍化"),
-        (_as_vote(s.get("mkt_now")),    "大盤順風",       "大盤逆風"),
-    ]
-    return _tally(votes)
+    """不投票 —— 算一個數字「預測下 N 分鐘斜率」:
+       預測 = 2 × 後10分% − 前10分%(等加速度外推:現在速度 + 加速度),
+       再乘買賣力道權重(內外盤同向放大、相反縮小)。
+    回 {lean, dir, conf, reason, pred_pct}。資料不足 → ⚪。"""
+    s_recent = _num(s.get("now_move_pct"))    # 後10分%(現在速度)
+    s_prior = _num(s.get("prior_move_pct"))   # 前10分%(上一段)
+    if s_recent is None or s_prior is None:
+        return {"lean": "⚪ 資料不足", "dir": 0, "conf": "低", "reason": "", "pred_pct": None}
+
+    pred = 2.0 * s_recent - s_prior           # 預測下 N 分斜率(%)
+
+    # 買賣力道加權:net ∈ -1~1,同向放大、相反縮小;沒資料就不調(w=1)
+    net = _num(s.get("pressure_net"))
+    if net is not None and pred != 0:
+        w = max(0.2, 1.0 + NH_ALPHA * net * (1 if pred > 0 else -1))
+    else:
+        w = 1.0
+    score = pred * w                          # 最終分數(%)
+
+    # 方向
+    if score >= NH_FLAT:
+        d, arrow = 1, "↑"
+    elif score <= -NH_FLAT:
+        d, arrow = -1, "↓"
+    else:
+        d, arrow = 0, "→"
+
+    # 信心(看分數大小;買賣力道沒資料 → 高降一級,老實一點)
+    mag = abs(score)
+    if d == 0:
+        conf = "低"
+    elif mag >= NH_CONF_HI:
+        conf = "高"
+    elif mag >= NH_CONF_MID:
+        conf = "中"
+    else:
+        conf = "低"
+    if net is None and conf == "高":
+        conf = "中"
+
+    # 白話理由(轉向/延續 + 加速/趨緩 + 買賣力道)
+    bits: list[str] = []
+    if d != 0:
+        same_dir = (s_recent >= 0) == (s_prior >= 0)
+        if not same_dir:                                  # 一正一反 = 剛翻
+            bits.append("剛翻上" if s_recent > 0 else "剛翻下")
+        elif abs(s_recent) < abs(s_prior) * 0.6:          # 同向但減速 → 動能在退、要反轉
+            bits.append("跌不動、要止跌" if s_recent < 0 else "漲不動、要回")
+        elif abs(s_recent) > abs(s_prior) * 1.15:         # 同向加速
+            bits.append("越跌越快" if s_recent < 0 else "越漲越快")
+        else:
+            bits.append("延續往下" if s_recent < 0 else "延續往上")
+        if net is not None:
+            if net >= 0.15:
+                bits.append("有買盤")
+            elif net <= -0.15:
+                bits.append("賣壓重")
+
+    lean = f"{arrow} 預測 {score:+.1f}%" if d != 0 else "→ 預測持平"
+    return {"lean": lean, "dir": d, "conf": conf,
+            "reason": "、".join(bits), "pred_pct": round(score, 2)}
 
 
 # ===========================================================================
