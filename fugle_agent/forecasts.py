@@ -1,4 +1,4 @@
-# 🔖最新批次 30M-0608-1425 ｜ ⬆️【要上傳】forecasts.py — 多一盞「下30分鐘」預測斜率(共 5 盞)
+# 🔖最新批次 4L-0608-1454 ｜ ⬆️【要上傳】forecasts.py — 加「下60分鐘」「一天(日線)」兩盞預測斜率
 """四盞預測:下一小時 / 今天收盤 / 明天 / 三天後 —— 用「同一份此刻最新快照」算。
 
 設計原則:
@@ -159,10 +159,24 @@ def next_hour(s: dict) -> dict:
 
 
 def next_hour_30(s: dict) -> dict:
-    """下一小時(30 分窗):預測下 30 分斜率(同算法、較長尺度)。"""
+    """下30分鐘(30 分窗):預測下 30 分斜率(同算法、較長尺度)。"""
     return _predict_slope(_num(s.get("now_move_pct_30")),
                           _num(s.get("prior_move_pct_30")),
                           _num(s.get("pressure_net_30")))
+
+
+def next_hour_60(s: dict) -> dict:
+    """下60分鐘(60 分窗):預測下 60 分斜率(同算法、更長尺度)。"""
+    return _predict_slope(_num(s.get("now_move_pct_60")),
+                          _num(s.get("prior_move_pct_60")),
+                          _num(s.get("pressure_net_60")))
+
+
+def next_day(s: dict) -> dict:
+    """一天(日線):預測下一天斜率 = 2×後3天 − 前3天,用『外資』當權重(同一招、換成日線)。"""
+    return _predict_slope(_num(s.get("now_move_pct_day")),
+                          _num(s.get("prior_move_pct_day")),
+                          _num(s.get("foreign_dir")))
 
 
 # ===========================================================================
@@ -334,12 +348,16 @@ def all_three(snapshot: dict, *, is_holding: bool, headwind: bool = False,
     (函式名沿用 all_three 不改,避免動到所有呼叫端;實際回四盞。)"""
     nh = next_hour(snapshot)
     nh30 = next_hour_30(snapshot)
+    nh60 = next_hour_60(snapshot)
+    nd = next_day(snapshot)
     tc = today_close(snapshot)
     tm = tomorrow(snapshot)
     td = three_day(snapshot)
     return {
         "next_hour": nh,
         "next_hour_30": nh30,
+        "next_hour_60": nh60,
+        "next_day": nd,
         "today_close": tc,
         "tomorrow": tm,
         "three_day": td,

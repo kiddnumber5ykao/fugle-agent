@@ -1,4 +1,4 @@
-# 🔖最新批次 30M-0608-1425 ｜ ⬆️【要上傳】live_forecast.py — snapshot 補 30 分窗(now/prior_move_pct_30 + pressure_net_30)
+# 🔖最新批次 4L-0608-1454 ｜ ⬆️【要上傳】live_forecast.py — snapshot 補 60 分窗 + 日線(60min/day slope inputs)
 """即時組裝層 —— 打開頁面當下,把每檔的「此刻最新數字」抓齊,餵給 forecasts 引擎。
 
 分工:
@@ -152,8 +152,8 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
         low = il._f(quote.get("lowPrice")) or il._f(quote.get("low"))
         candles = c.intraday_candles(sym) or {}
         series = il.series_from_candles(candles)
-        # 多抓逐筆,確保「最近 10 / 30 分鐘」在熱門股也涵蓋得到(之後在 pressure 裡用時間篩)
-        ticks = c.intraday_ticks(sym, limit=1200) or {}
+        # 多抓逐筆,確保「最近 10 / 30 / 60 分鐘」在熱門股也涵蓋得到(之後在 pressure 裡用時間篩)
+        ticks = c.intraday_ticks(sym, limit=2000) or {}
         if len(series) < 2:
             series = il.series_from_ticks(ticks)
     except Exception:
@@ -173,8 +173,9 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
     # 下一小時的方向 = 抓「剛開始要往上/往下走」:把近20分切前後半,用後半(最近約10分)
     # 的方向當主軸,再加一個『剛轉向』判斷。不是跟一開盤比、也不是看整段淨變化。
     now_move, prior_move, turn, accel = il.turn_and_accel(series, window_min=NH_RECENT_MIN * 2)
-    # 30 分窗(同算法、較長尺度):前30分 / 後30分
+    # 30 / 60 分窗(同算法、較長尺度):前N分 / 後N分
     now_move_30, prior_move_30, _t30, _a30 = il.turn_and_accel(series, window_min=60)
+    now_move_60, prior_move_60, _t60, _a60 = il.turn_and_accel(series, window_min=120)
     close_strength = None
     if high is not None and low is not None and high > low and last_price is not None:
         close_strength = max(0.0, min(1.0, (last_price - low) / (high - low)))
@@ -187,10 +188,17 @@ def forecast_for(sym: str, *, shares: int = 0, total_cost: float = 0.0,
         "now_move_pct":   now_move,     # 後10分%(=現在速度;today_close 也用)
         "prior_move_pct": prior_move,   # 前10分%(外推用)
         "pressure_net":   il.pressure_net_from_ticks(ticks, window_min=NH_RECENT_MIN),  # 內外盤連續淨值 -1~1
-        # ⏱️ 下一小時(30 分窗)
+        # ⏱️ 下30分鐘(30 分窗)
         "now_move_pct_30":   now_move_30,
         "prior_move_pct_30": prior_move_30,
         "pressure_net_30":   il.pressure_net_from_ticks(ticks, window_min=30),
+        # 🕐 下60分鐘(60 分窗)
+        "now_move_pct_60":   now_move_60,
+        "prior_move_pct_60": prior_move_60,
+        "pressure_net_60":   il.pressure_net_from_ticks(ticks, window_min=60),
+        # 📅 一天(日線斜率;權重用『外資』= 下面三天後那段的 foreign_dir)
+        "now_move_pct_day":   _sg("day_recent_pct"),
+        "prior_move_pct_day": _sg("day_prior_pct"),
         # 下面這幾個舊鍵保留(today_close / 防呆用,不影響新算法)
         "turn":         turn,
         "pressure":     il.pressure_from_ticks(ticks, window_min=NH_RECENT_MIN),

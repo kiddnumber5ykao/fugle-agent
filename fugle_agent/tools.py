@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-08 07:55】tools.py — 公司簡介改用官方產業別、提示詞禁止瞎掰產品(修光學鏡頭bug)
+# 🔖最新批次 4L-0608-1454 ｜ ⬆️【要上傳】tools.py — 加日線斜率(day_recent/prior_pct,給「一天」盞)〔含先前光學bug修正〕
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -2800,6 +2800,11 @@ def _compute_short_signals(sym: str, quote: dict | None = None) -> dict:
             "vol_ratio_5_20":   vol_ratio_5_20,
             "dist_high20_pct":  dist_high20_pct,
             "dist_low20_pct":   dist_low20_pct,
+            # 日線斜率(給「一天」盞用,跟分鐘那幾盞同一招、只是換日線):後3天 / 前3天
+            "day_recent_pct":   ((closes[-1] / closes[-4] - 1) * 100
+                                 if len(closes) >= 4 else None),
+            "day_prior_pct":    ((closes[-4] / closes[-7] - 1) * 100
+                                 if len(closes) >= 7 else None),
         }
     except Exception as e:
         return {"ok": False, "mode": getattr(_client, "mode", "unknown"),
