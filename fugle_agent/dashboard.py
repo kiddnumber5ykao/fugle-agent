@@ -1,4 +1,4 @@
-# 🔖最新批次 SRC-0608-2032 ｜ ⬆️【要上傳】dashboard.py — 一格多來源(、隔開)篩選/搜尋皆支援 + 來源容忍欄名 + 三盞燈圓角面板/對齊/上色
+# 🔖最新批次 SRC-0608-2320 ｜ ⬆️【要上傳】dashboard.py — 清單先收起來(選了篩選才列股票)+ 卡片內多來源各一顆標籤 + 一格多來源篩選/搜尋 + 三盞燈面板上色
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -1080,13 +1080,27 @@ def _light_filter(rows: list, key_prefix: str) -> list:
     return out
 
 
+def _any_filter_active(key_prefix: str) -> bool:
+    """有沒有選任何篩選條件(任一盞燈 ≠ 不限,或來源 ≠ 全部)。"""
+    for k in _LAMPS.values():
+        if st.session_state.get(f"flt_{key_prefix}_{k}", "不限") != "不限":
+            return True
+    return st.session_state.get(f"flt_{key_prefix}_src", "全部") != "全部"
+
+
 def _render_stock_list(rows: list[dict], card_fn, act_top: bool = True,
                        is_holding: bool = True) -> None:
-    """一打開就看到全部股票 —— 每檔一行摘要(四盞燈箭頭 + 怎麼辦),可用『燈號』篩選。
+    """先收起來 —— 篩選器一直在;選了條件才列出符合的股票。
     優先讀 Sheet 的「燈號快取」(背景算好 → 秒開),沒有的才即時補算。"""
     st.session_state["_forecasts"] = _forecasts_from_cache_or_live(rows, is_holding)
 
-    rows = _light_filter(rows, "pos" if is_holding else "wl")
+    kp = "pos" if is_holding else "wl"
+    rows = _light_filter(rows, kp)
+
+    # 還沒選任何篩選 → 先不顯示股票,只給提示(篩選器上面已經畫出來了)
+    if not _any_filter_active(kp):
+        st.caption("👆 在上面「🔦 篩選」選個條件(燈號或來源),就會列出股票")
+        return
 
     def _act(r: dict) -> str:
         return _fc_get(r).get("action") or _g(r, "我該做啥", "綜合建議") or ""
@@ -1097,7 +1111,7 @@ def _render_stock_list(rows: list[dict], card_fn, act_top: bool = True,
     rows = sorted(rows, key=lambda r: _pri(_act(r)))
     st.caption(f"共 {len(rows)} 檔")
     if not rows:
-        st.info("沒有符合這個燈號條件的股票。")
+        st.info("沒有符合這個篩選條件的股票。")
         return
     for r in rows:
         card_fn(r)
@@ -1221,6 +1235,15 @@ def _detail_common(r: dict, action: str) -> None:
                      f'{"賺" if v >= 0 else "賠"} {abs(v):.1f}%　{pnl.get("損益", 0):+,.0f}</span>')
         st.markdown(line + (f'<br><span style="{mut};font-size:12px">資料時間 {dt}</span>'
                             if dt else ""), unsafe_allow_html=True)
+
+    # 1.5) 追蹤理由 / 來源:一檔多個來源 → 每個各一顆標籤(chip),分開看得清楚
+    srcs = _split_sources(_source_of(r))
+    if srcs:
+        chips = "".join(
+            '<span style="display:inline-block;background:#EFEAFB;color:#5B3FA8;'
+            'border-radius:999px;padding:1px 11px;margin:0 6px 5px 0;font-size:12px;'
+            f'font-weight:500">📌 {s}</span>' for s in srcs)
+        st.markdown(f'<div style="margin-top:7px">{chips}</div>', unsafe_allow_html=True)
 
     # 2) 三盞預測:⚡下10分鐘 → ⏱️下30分鐘 → 🕐下60分鐘
     #    每一盞「一律都顯示」,沒資料就標 ⚪ 資料不足。收進圓角面板、標籤對齊、預測上色。
