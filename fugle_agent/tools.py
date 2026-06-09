@@ -1,4 +1,4 @@
-# 🔖最新批次 SRC-0609-0024 ｜ ⬆️【要上傳】tools.py — 新增 fill_valrev(把本益比/股價淨值比/月營收年增·月增·累計年增寫進 Sheet,免費無AI)+ 燈號快取沿用上次〔含日線斜率〕
+# 🚀【最新待上傳 2026-06-09 14:27 · DEPLOY-0609】tools.py ｜ SRC-0609-0024 — 新增 fill_valrev(本益比/股價淨值比/月營收寫進Sheet,免費無AI)+ 燈號快取沿用上次
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:

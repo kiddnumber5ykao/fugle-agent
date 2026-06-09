@@ -1,4 +1,4 @@
-# 🔖最新批次 4L-0608-1454 ｜ ⬆️【要上傳】live_forecast.py — snapshot 補 60 分窗 + 日線(60min/day slope inputs)
+# 🚀【最新待上傳 2026-06-09 14:27 · DEPLOY-0609】live_forecast.py ｜ 4L-0608-1454(有算下60 + 日線斜率輸入)
 """即時組裝層 —— 打開頁面當下,把每檔的「此刻最新數字」抓齊,餵給 forecasts 引擎。
 
 分工:
