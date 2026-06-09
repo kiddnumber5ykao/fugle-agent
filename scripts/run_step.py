@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 📅 ★最新版★ 上傳於 2026-06-01 22:06  (原最後更新 2026-05-29)(全新:單一步驟,給多 job 平行用)
+# 🚀【最新待上傳 2026-06-09 14:27 · DEPLOY-0609】run_step.py — 停用 AI 基本面 + market 步驟順手寫公司數字進 Sheet(fill_valrev)
 """單一步驟入口 — 給 GitHub Actions 多 job 平行跑用。
 
 把「全更新」拆成可平行的步驟,各自一個 job:
@@ -90,9 +90,15 @@ def main() -> None:
         print(f"   ✅ 燈號快取:部位 {r.get('positions')} / 追蹤 {r.get('watchlist')} 筆")
     elif step == "market":
         # 每天一次:名字中文化 + 填上市/上櫃(只改空白/英文名,中文名不動;輕量)
-        from fugle_agent.tools import fill_market_labels
+        from fugle_agent.tools import fill_market_labels, fill_valrev
         r = fill_market_labels(eff_scope)
         print(f"   ✅ 名字+市場別:部位 {r.get('positions')} / 追蹤 {r.get('watchlist')} 筆有更新")
+        # 順手把公司數字(本益比/股價淨值比/月營收 年增·月增·累計)寫進 Sheet,免費、無 AI
+        try:
+            rv = fill_valrev(eff_scope)
+            print(f"   ✅ 公司數字:部位 {rv.get('positions')} / 追蹤 {rv.get('watchlist')} 筆有更新")
+        except Exception as e:
+            print(f"   ⚠️ 公司數字略過: {type(e).__name__}: {e}")
     elif step == "resync":
         # 依 scope 只動該動的分頁(positions 不碰追蹤清單,反之亦然)
         r = resync_and_fill_names(eff_scope)
@@ -120,20 +126,11 @@ def main() -> None:
         # pos_new:技術跑全部持股(免費,刷新所有股價/動能),不加 symbols 篩選
         asyncio.run(organize_all_technical.handler(args))
     elif step == "fundamental":
-        args = {"scope": eff_scope}
-        if wl_new:
-            syms = _new_watchlist_symbols("基本面資料時間")
-            if not syms:
-                print("   ℹ️ 沒有新的追蹤代號,基本面略過"); return
-            args["symbols"] = syms
-            print(f"   🆕 新追蹤(基本面): {syms}")
-        elif pos_new:  # 新交易:基本面只補沒分析過的新持股
-            syms = _new_position_symbols("基本面資料時間")
-            if not syms:
-                print("   ℹ️ 沒有新持股要補基本面,基本面略過"); return
-            args["symbols"] = syms
-            print(f"   🆕 新持股(基本面): {syms}")
-        asyncio.run(organize_all_deep.handler(args))
+        # 2026-06-08:公司資訊已改成卡片即時抓三個免費官方數字(本益比 / 股價淨值比 / 月營收年增),
+        #   不再花 AI 算公司簡介 / 體質 / 估值 / 配息 / 營收 / 新聞。基本面這步停用,不花錢。
+        #   (要恢復 AI 基本面:把下面兩行刪掉,還原成 organize_all_deep.handler 那段即可。)
+        print("   💤 已停用 AI 基本面(公司數字改即時免費抓:本益比/股價淨值比/月營收年增)")
+        return
     elif step == "recompute":
         adv = _recompute_advice(eff_scope)
         print(f"   🧭 部位 {adv.get('positions')} / 追蹤 {adv.get('watchlist')}")
