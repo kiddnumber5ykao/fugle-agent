@@ -1,4 +1,4 @@
-# 🔖最新批次 SRC-0608-2320 ｜ ⬆️【要上傳】dashboard.py — 清單先收起來(選了篩選才列股票)+ 卡片內多來源各一顆標籤 + 一格多來源篩選/搜尋 + 三盞燈面板上色
+# 🔖最新批次 SRC-0609-1020 ｜ ⬆️【要上傳】dashboard.py — 盤中快取燈全空就即時重算(不被爛快取卡住,不靠排程)+ 追蹤標持有中 + 公司數字含EPS優先讀Sheet + 清單先收起 + 多來源篩選
 """手機儀表板 — 「加油好嗎？」首頁。
 
 讀 Google Sheet 的股票部位 / 追蹤清單,渲染成手機友善的卡片:
@@ -456,11 +456,32 @@ def _prefetch_forecasts(items: tuple, is_holding: bool) -> dict:
         return {}
 
 
+def _is_market_hours() -> bool:
+    """台北時間、週一~五、09:00–13:30(含一點緩衝)→ 盤中。"""
+    import datetime as _dt
+    now = _dt.datetime.utcnow() + _dt.timedelta(hours=8)
+    if now.weekday() >= 5:
+        return False
+    mins = now.hour * 60 + now.minute
+    return 9 * 60 <= mins <= 13 * 60 + 35
+
+
+def _lights_all_empty(fc: dict) -> bool:
+    """三盞燈是不是全都「資料不足」(快取爛掉/過期的特徵)。任一盞有資料 → False。"""
+    for k in ("next_hour", "next_hour_30", "next_hour_60"):
+        lean = str((fc.get(k) or {}).get("lean", "") or "")
+        if lean and not lean.startswith("⚪"):
+            return False
+    return True
+
+
 def _forecasts_from_cache_or_live(rows: list, is_holding: bool) -> dict:
-    """先讀 Sheet 的「燈號快取」欄(背景每幾分鐘算好 → 秒開);沒有/壞掉的那幾檔才即時補算。"""
+    """先讀 Sheet 的「燈號快取」欄(背景算好 → 秒開);沒有/壞掉的那幾檔才即時補算。
+    盤中時,快取的三盞燈若全是「資料不足」(排程沒跑/收盤後寫的爛快取)→ 不採用,改即時重算。"""
     import json as _json
     fcs: dict = {}
     need: list = []
+    market_now = _is_market_hours()
     for r in rows:
         sym = str(_g(r, "代號", "symbol") or "").lstrip("'").strip()
         if not sym:
@@ -472,9 +493,13 @@ def _forecasts_from_cache_or_live(rows: list, is_holding: bool) -> dict:
                 fc = _json.loads(raw)
             except Exception:
                 fc = None
-        if isinstance(fc, dict) and fc.get("ok"):
+        good = isinstance(fc, dict) and fc.get("ok")
+        # 盤中:快取看似 ok 但三盞燈全空 → 視為過期,即時重算(不被爛快取卡住)
+        if good and market_now and _lights_all_empty(fc):
+            good = False
+        if good:
             fcs[sym] = fc
-        else:   # 還沒被背景算到(剛加的)或壞掉 → 即時補這一檔
+        else:   # 還沒被背景算到(剛加的)/壞掉/盤中過期 → 即時補這一檔
             need.append((sym, int(_num(_g(r, "股數")) or 0),
                          float(_num(_g(r, "總成本")) or 0.0)))
     if need:
@@ -1131,6 +1156,25 @@ def _holding_card(r: dict) -> None:
         _detail_common(r, action)
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _held_codes() -> set:
+    """目前持有的代號集合(讀『股票部位』分頁)。給追蹤清單標「持有中」用 —
+    從追蹤變持有不用刪追蹤,賣掉後自動不再標(因為部位沒了)。"""
+    out = set()
+    try:
+        from fugle_agent import sheets
+        rows = _cached_tab(os.getenv("PORTFOLIO_POSITIONS_TAB", sheets.DEFAULT_POSITIONS_TAB))
+        for r in (rows or []):
+            if not isinstance(r, dict) or r.get("_error"):
+                continue
+            c = (_g(r, "代號", "symbol") or "").lstrip("'").strip()
+            if c:
+                out.add(c)
+    except Exception:
+        pass
+    return out
+
+
 def _watch_card(r: dict) -> None:
     code = _g(r, "代號", "symbol")
     name = _g(r, "名稱", "name")
@@ -1139,8 +1183,15 @@ def _watch_card(r: dict) -> None:
     _dot = {"上市": "🔵", "上櫃": "🟠", "興櫃": "⚪"}.get(_g(r, "市場別") or fc.get("market") or "", "")
     src = _source_of(r)                      # 來源/追蹤理由(容忍欄名變化)
     src_txt = f" 〔{src}〕" if src else ""
-    label = (f"{_dot} " if _dot else "") + f"{code} {name}{src_txt}　{_light_arrows(fc)}"
+    held = (code or "").lstrip("'").strip() in _held_codes()
+    hold_txt = "　✅持有中" if held else ""
+    label = ((f"{_dot} " if _dot else "")
+             + f"{code} {name}{hold_txt}{src_txt}　{_light_arrows(fc)}")
     with st.expander(label):
+        if held:
+            st.markdown('<span style="display:inline-block;background:#E3F3E8;color:#1E7A45;'
+                        'border-radius:999px;padding:1px 11px;margin-bottom:4px;font-size:12px;'
+                        'font-weight:600">✅ 目前持有</span>', unsafe_allow_html=True)
         _detail_common(r, action)
 
 
@@ -1211,8 +1262,31 @@ def _fund_by_code() -> dict:
     return out
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _val_rev(code: str) -> dict:
+    """免費官方數字:本益比(per)/ 股價淨值比(pbr)/ 月營收年增(yoy)+ 官方資料日期。
+    證交所(上市)+ 櫃買(上櫃);ETF / 興櫃可能查不到 → None。展開卡片才抓,快取 1 小時。"""
+    out = {"pe": None, "pb": None, "val_date": "",
+           "yoy": None, "mom": None, "cum_yoy": None, "rev_month": ""}
+    if not code:
+        return out
+    try:
+        from fugle_agent import free_fetch
+        v = free_fetch.get_valuation(code) or {}
+        out["pe"], out["pb"] = v.get("per"), v.get("pbr")
+        out["val_date"] = v.get("data_date") or ""
+        rv = free_fetch.get_revenue(code) or {}
+        out["yoy"] = rv.get("yoy")          # 年增 %
+        out["mom"] = rv.get("mom")          # 月增 %
+        out["cum_yoy"] = rv.get("cum_yoy")  # 累計年增 %
+        out["rev_month"] = rv.get("year_month") or ""
+    except Exception:
+        pass
+    return out
+
+
 def _detail_common(r: dict, action: str) -> None:
-    """卡片內容(全部即時算):現價/損益 → 三盞預測 → 怎麼辦 → 關於這檔。"""
+    """卡片內容(即時):現價/損益 → 追蹤理由 → 三盞預測 → 三個公司數字。"""
     mut = "color:#5F5E5A"
     fc = _fc_get(r)
 
@@ -1272,44 +1346,46 @@ def _detail_common(r: dict, action: str) -> None:
                 f'border-radius:10px;padding:7px 12px 9px">{lights}</div>',
                 unsafe_allow_html=True)
 
-    # 3) 怎麼辦(用三盞預測算好的,已含大盤逆風提醒)
-    act = action or fc.get("action") or ""
-    if act:
-        st.markdown('<div style="margin-top:10px;border-top:0.5px solid rgba(127,127,127,.2);'
-                    f'padding-top:8px">👉 <b>怎麼辦</b>　{act}</div>', unsafe_allow_html=True)
-
-    # 4) 關於這檔(備註區):體質(最上面、最顯眼)→ 公司在幹嘛 → 新聞 → 估值/配息/營收
-    # 公司資料跟著「代號」走:這一頁沒有就去另一頁找(買進追蹤的股,持股立刻有體質)。
+    # 3) 公司數字 —— 本益比 / 股價淨值比 / 月營收(年增·月增·累計年增)。
+    #    優先讀 Sheet 欄位(背景填好的 → 秒讀);Sheet 沒有才退回即時抓(證交所/櫃買,無 AI)。
     _code = (_g(r, "代號", "symbol") or "").lstrip("'").strip()
-    _fub = _fund_by_code().get(_code, {})
+    pe, pb = _fnum(_g(r, "本益比")), _fnum(_g(r, "股價淨值比"))
+    yoy, mom, cum = _fnum(_g(r, "月營收年增")), _fnum(_g(r, "月營收月增")), _fnum(_g(r, "累計年增"))
+    if all(x is None for x in (pe, pb, yoy, mom, cum)):   # Sheet 都沒有 → 即時抓
+        vr = _val_rev(_code)
+        pe, pb = vr.get("pe"), vr.get("pb")
+        yoy, mom, cum = vr.get("yoy"), vr.get("mom"), vr.get("cum_yoy")
+        _fr = [x for x in (f'估值 {vr["val_date"]}' if vr.get("val_date") else "",
+                           f'營收 {vr["rev_month"]}' if vr.get("rev_month") else "") if x]
+        fresh_txt = ("資料日期:" + "・".join(_fr)) if _fr \
+            else "查不到官方估值/營收(可能是 ETF 或興櫃)"
+    else:
+        _t = _g(r, "公司更新時間", "基本面資料時間")
+        fresh_txt = f"更新於 {_t}" if _t else "已存 Sheet"
 
-    def _fund(col: str, *alias: str) -> str:
-        return _g(r, col, *alias) or _fub.get(col, "")
+    def _num1(x):
+        return f"{x:.1f}" if isinstance(x, (int, float)) else "—"
 
-    health = _fund("公司體質")
-    about = _fund("公司簡介")
-    items = [
-        ("新聞", _fund("新聞", "近期新聞重點")),
-        ("估值", _fund("估值")),
-        ("配息", _fund("配息")),
-        ("營收", _fund("營收動能")),
-    ]
-    body = "".join(
-        f'<div style="display:flex;gap:8px;font-size:13px;padding:2px 0">'
-        f'<span style="{mut};min-width:34px">{k}</span><span>{v}</span></div>'
-        for k, v in items if v)
-    if health or about or body:
-        st.markdown('<div style="margin-top:12px">📋 <b>關於這檔</b></div>', unsafe_allow_html=True)
-        if health:
-            st.markdown(f'<div style="font-size:15px;font-weight:500;margin:4px 0 2px">{health}</div>',
-                        unsafe_allow_html=True)
-        if about:
-            st.markdown(f'<div style="{mut};font-size:13px;margin-bottom:4px">🏢 {about}</div>',
-                        unsafe_allow_html=True)
-        if body:
-            st.markdown(body, unsafe_allow_html=True)
-        ft, fs = _rel_time(_fund("公司更新時間", "基本面資料時間"), 60 * 24 * 5)
-        st.caption(f"公司資料 {ft}{' ⚠️舊' if fs else ''}")
+    def _pct(x):
+        if not isinstance(x, (int, float)):
+            return "—"
+        c = "var(--color-text-success)" if x >= 0 else "var(--color-text-danger)"
+        return f'<span style="color:{c};font-weight:600">{x:+.1f}%</span>'
+
+    # 近四季EPS = 現價 ÷ 本益比(證交所本益比的反推;虧損股無本益比 → 不顯示)
+    eps = (price / pe) if (isinstance(price, (int, float)) and isinstance(pe, (int, float))
+                           and pe) else None
+    eps_txt = f"{eps:.2f} 元" if isinstance(eps, (int, float)) else "—"
+
+    rows3 = (("本益比", _num1(pe)), ("近四季EPS", eps_txt), ("股價淨值比", _num1(pb)),
+             ("月營收年增", _pct(yoy)), ("月營收月增", _pct(mom)), ("累計年增", _pct(cum)))
+    body3 = "".join(
+        '<div style="display:flex;align-items:baseline;gap:8px;margin-top:4px">'
+        f'<span style="flex:0 0 110px;color:#3D3C39"><b>{k}</b></span><span>{v}</span></div>'
+        for k, v in rows3)
+    st.markdown('<div style="margin-top:12px">📊 <b>公司數字</b></div>'
+                f'<div style="margin-top:2px">{body3}</div>', unsafe_allow_html=True)
+    st.caption(fresh_txt)
 
 
 def _realized_total() -> float:

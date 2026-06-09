@@ -1,4 +1,4 @@
-# 🔖最新批次 SRC-0608-1853 ｜ ⬆️【要上傳】tools.py — 燈號快取「算不出就沿用上一次有資料的」(盤後也看得到最近一筆)〔含日線斜率+光學bug修正〕
+# 🔖最新批次 SRC-0609-0024 ｜ ⬆️【要上傳】tools.py — 新增 fill_valrev(把本益比/股價淨值比/月營收年增·月增·累計年增寫進 Sheet,免費無AI)+ 燈號快取沿用上次〔含日線斜率〕
 """Claude Agent SDK tool definitions.
 
 Each tool returns the SDK-expected envelope:
@@ -3745,6 +3745,67 @@ def fill_market_labels(scope: str = "all", light: bool = False) -> dict:
         except Exception as e:
             print(f"⚠️ 部位名字/市場別失敗: {e}", flush=True)
 
+    return {"ok": True, "positions": n_pos, "watchlist": n_wl}
+
+
+def fill_valrev(scope: str = "all") -> dict:
+    """把免費官方數字寫進 Sheet(網頁直接讀=秒開,不用即時抓):
+      本益比 / 股價淨值比(證交所每日 BWIBBU + 櫃買)+ 月營收 年增/月增/累計年增(證交所 t187ap05)。
+      整包抓一次、用代號查表,免費、無 AI。
+      需求:「股票部位」「追蹤清單」要先各有表頭:本益比、股價淨值比、月營收年增、月營收月增、累計年增
+            (沒有的欄 Apps Script 會略過不寫,不報錯)。寫入時間記在『公司更新時間』。"""
+    import datetime as _dt
+    now = (_dt.datetime.utcnow() + _dt.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M")
+    do_pos = scope in ("all", "positions")
+    do_wl = scope in ("all", "watchlist")
+
+    def _payloads(rows: list, sym_keys: tuple) -> list[dict]:
+        out = []
+        for r in rows:
+            if not isinstance(r, dict) or r.get("_error"):
+                continue
+            sym = str(next((r.get(k) for k in sym_keys if r.get(k)), "") or "").lstrip("'").strip()
+            if not sym:
+                continue
+            try:
+                v = free_fetch.get_valuation(sym) or {}
+                rv = free_fetch.get_revenue(sym) or {}
+            except Exception:
+                v, rv = {}, {}
+            payload = {"symbol": sym, "代號": sym, "公司更新時間": now}
+            if v.get("per") is not None:
+                payload["本益比"] = round(v["per"], 2)
+            if v.get("pbr") is not None:
+                payload["股價淨值比"] = round(v["pbr"], 2)
+            if rv.get("yoy") is not None:
+                payload["月營收年增"] = round(rv["yoy"], 1)
+            if rv.get("mom") is not None:
+                payload["月營收月增"] = round(rv["mom"], 1)
+            if rv.get("cum_yoy") is not None:
+                payload["累計年增"] = round(rv["cum_yoy"], 1)
+            if len(payload) > 3:   # 至少抓到一個數字才寫
+                out.append(payload)
+        return out
+
+    n_pos = n_wl = 0
+    if do_wl:
+        try:
+            wtab = os.getenv(sheets.WATCHLIST_TAB_ENV, sheets.DEFAULT_WATCHLIST_TAB)
+            pl = _payloads(sheets.load_watchlist() or [], ("symbol", "代號"))
+            if pl:
+                ok = _bulk_or_parallel(wtab, pl, sheets_writer.upsert_watchlist_item)
+                n_wl = sum(1 for x in ok.values() if x)
+        except Exception as e:
+            print(f"⚠️ 追蹤清單估值/營收失敗: {e}", flush=True)
+    if do_pos:
+        try:
+            ptab = os.getenv(sheets.POSITIONS_TAB_ENV, sheets.DEFAULT_POSITIONS_TAB)
+            pl = _payloads(sheets.load_positions() or [], ("symbol", "代號"))
+            if pl:
+                ok = _bulk_or_parallel(ptab, pl, sheets_writer.upsert_position)
+                n_pos = sum(1 for x in ok.values() if x)
+        except Exception as e:
+            print(f"⚠️ 部位估值/營收失敗: {e}", flush=True)
     return {"ok": True, "positions": n_pos, "watchlist": n_wl}
 
 
