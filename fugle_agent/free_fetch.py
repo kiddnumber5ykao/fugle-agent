@@ -1,4 +1,4 @@
-# ⬆️【要上傳 2026-06-08 07:55】free_fetch.py — 新增官方產業別(修公司簡介亂掰光學鏡頭的bug)
+# 🚀【最新待上傳 2026-06-09 14:27 · DEPLOY-0609】free_fetch.py — 上櫃月營收改用櫃買 OpenAPI(mopsfin_t187ap05_O,已驗證)+ 官方產業別
 """免費官方資料抓取 — 估值 / 月營收 / 新聞,給 _fetch_fundamentals 用。
 
 目的:把最貴的 Anthropic `web_search` 拿掉。改成:
@@ -298,8 +298,8 @@ def get_industry(sym: str) -> str:
 _revenue_cache: Optional[dict[str, dict]] = None
 
 _REV_ENDPOINTS = [
-    "https://openapi.twse.com.tw/v1/opendata/t187ap05_L",   # 上市
-    "https://openapi.twse.com.tw/v1/opendata/t187ap05_O",   # 上櫃(待測,失敗自動略過)
+    "https://openapi.twse.com.tw/v1/opendata/t187ap05_L",       # 上市(證交所)
+    "https://www.tpex.org.tw/openapi/v1/mopsfin_t187ap05_O",    # 上櫃(櫃買 OpenAPI,已驗證可用)
 ]
 
 
