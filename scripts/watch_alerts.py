@@ -12,12 +12,19 @@ from __future__ import annotations
 
 import datetime
 import os
+import sys
 import time
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
-from fugle_agent import sheets
-from fugle_agent.client import FugleClient
+# 從 scripts/ 跑時,把 repo 根目錄加進路徑,才找得到 fugle_agent
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from fugle_agent import sheets  # noqa: E402
+from fugle_agent.client import FugleClient  # noqa: E402
 
 PLAN_TAB = os.getenv("PLAN_TAB", "照哥計劃表")
 NEAR_PCT = float(os.getenv("NEAR_PCT", "2"))
