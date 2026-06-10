@@ -23,7 +23,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from fugle_agent import sheets  # noqa: E402
+from fugle_agent import pro_signals, sheets  # noqa: E402
 from fugle_agent.client import FugleClient  # noqa: E402
 
 PLAN_TAB = os.getenv("PLAN_TAB", "照哥計劃表")
@@ -103,8 +103,18 @@ def main() -> None:
     snap = [f"📡 盯盤啟動,盯 {len(plan)} 檔(每 {POLL_SEC}s,靠近 {NEAR_PCT}% 才提醒):"]
     for p in plan:
         price = get_price(c, p["code"])
-        snap.append("・" + (_line(p["code"], price, p["in"], p["tgt"])
-                            if price is not None else f"{p['code']} 現價抓不到"))
+        if price is None:
+            snap.append(f"・{p['code']} 現價抓不到")
+            continue
+        line = "・" + _line(p["code"], price, p["in"], p["tgt"])
+        try:
+            candles = c.intraday_candles(p["code"]) or {}
+            ticks = c.intraday_ticks(p["code"], limit=2000) or {}
+            v = pro_signals.entry_verdict(price, candles, ticks)
+            line += f"\n　{v['emoji']} {v['headline']}"
+        except Exception:
+            pass
+        snap.append(line)
     tg_send("\n".join(snap))
 
     alerted: dict[str, bool] = {}
@@ -123,8 +133,17 @@ def main() -> None:
             below_tgt = (p["tgt"] is None) or (price < p["tgt"])
             in_zone = near and below_tgt
             if in_zone and not alerted.get(p["code"]):
-                msg = [f"🔔 {p['code']} 到價附近了", _line(p["code"], price, p["in"], p["tgt"]),
-                       ("已到/更便宜,要不要低接你決定。" if d_in <= 0 else "快到進場價,要不要進你決定。")]
+                head = "已到/更便宜了" if d_in <= 0 else "快到買價"
+                msg = [f"🔔 {p['code']} {head}", _line(p["code"], price, p["in"], p["tgt"])]
+                # 算「現在該不該出手」白話判斷(只在要通知時才抓分鐘K+逐筆)
+                try:
+                    candles = c.intraday_candles(p["code"]) or {}
+                    ticks = c.intraday_ticks(p["code"], limit=2000) or {}
+                    v = pro_signals.entry_verdict(price, candles, ticks)
+                    msg.append(f"{v['emoji']} {v['headline']}（{'、'.join(v['reasons'][:4])}）")
+                except Exception as e:
+                    print(f"⚠️ 判斷算不出 {p['code']}: {type(e).__name__}", flush=True)
+                msg.append("你決定。")
                 tg_send("\n".join(msg))
                 alerted[p["code"]] = True
             elif not near:
