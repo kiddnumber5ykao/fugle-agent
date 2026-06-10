@@ -1,0 +1,34 @@
+# 🚀【最新待上傳 2026-06-09 · DEPLOY-0609】alert_watch.yml — 盯盤即時提醒(盤中長工作)
+name: 盯盤提醒 (盤中)
+run-name: 盯盤提醒
+
+on:
+  workflow_dispatch:        # 先手動觸發測試
+  # schedule:                # 之後穩了再開:台北 09:00 = UTC 01:00 啟動
+  #   - cron: '1 1 * * 1-5'
+
+concurrency:
+  group: alert-watch
+  cancel-in-progress: true
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300     # 撐一個交易日(約 4.5 小時)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11', cache: pip }
+      - run: pip install -r requirements.txt
+      - name: 盯盤
+        env:
+          FUGLE_MARKETDATA_API_KEY: ${{ secrets.FUGLE_MARKETDATA_API_KEY }}
+          PORTFOLIO_SHEET_URL:      ${{ secrets.PORTFOLIO_SHEET_URL }}
+          TELEGRAM_BOT_TOKEN:       ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:         ${{ secrets.TELEGRAM_CHAT_ID }}
+          FUGLE_MOCK: "0"
+          PLAN_TAB: "照哥計劃表"
+          NEAR_PCT: "2"
+          POLL_SEC: "60"
+          MAX_MIN: "270"
+        run: python scripts/watch_alerts.py
