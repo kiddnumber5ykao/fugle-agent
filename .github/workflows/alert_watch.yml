@@ -3,9 +3,9 @@ name: 盯盤提醒 (盤中)
 run-name: 盯盤提醒
 
 on:
-  workflow_dispatch:        # 先手動觸發測試
-  # schedule:                # 之後穩了再開:台北 09:00 = UTC 01:00 啟動
-  #   - cron: '1 1 * * 1-5'
+  workflow_dispatch:        # 保留手動(當備援)
+  schedule:                 # 台北 09:03 = UTC 01:03 啟動,週一~五;跑到收盤
+    - cron: '3 1 * * 1-5'
 
 concurrency:
   group: alert-watch
