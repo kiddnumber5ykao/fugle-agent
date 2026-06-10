@@ -69,10 +69,8 @@ def load_plan() -> list[dict]:
             continue
         if str(r.get("啟用") or "").strip() not in ("1", "✓", "v", "V", "是", "true", "True"):
             continue
-        p_in = _f(r.get("進場價"))
-        if p_in is None:
-            continue
-        plan.append({"code": code, "in": p_in, "tgt": _f(r.get("目標價"))})
+        # 進場價可留空 = 「不設價,技術面變好買點就通知」模式
+        plan.append({"code": code, "in": _f(r.get("進場價")), "tgt": _f(r.get("目標價"))})
     return plan
 
 
@@ -85,8 +83,9 @@ def get_price(c: FugleClient, code: str):
 
 
 def _line(code, price, p_in, p_tgt) -> str:
-    d_in = (price - p_in) / p_in * 100
-    s = f"{code} 現價 {price:g}　進場 {p_in:g}（{d_in:+.1f}%）"
+    s = f"{code} 現價 {price:g}"
+    if p_in:
+        s += f"　進場 {p_in:g}（{(price - p_in) / p_in * 100:+.1f}%）"
     if p_tgt:
         s += f"　目標 {p_tgt:g}（剩 +{(p_tgt - price) / price * 100:.1f}%）"
     return s
@@ -128,6 +127,26 @@ def main() -> None:
             price = get_price(c, p["code"])
             if price is None:
                 continue
+
+            # === 模式二:沒設進場價 → 不管價位,技術面變「好買點(🟢)」就通知 ===
+            if p["in"] is None:
+                try:
+                    candles = c.intraday_candles(p["code"]) or {}
+                    ticks = c.intraday_ticks(p["code"], limit=2000) or {}
+                    v = pro_signals.entry_verdict(price, candles, ticks)
+                except Exception as e:
+                    print(f"⚠️ 判斷算不出 {p['code']}: {type(e).__name__}", flush=True)
+                    continue
+                if v["emoji"] == "🟢" and not alerted.get(p["code"]):
+                    tg_send("\n".join([f"🟢 {p['code']} 看起來是好買點了!",
+                                       _line(p["code"], price, p["in"], p["tgt"]),
+                                       f"（{'、'.join(v['reasons'][:4])}）", "你決定。"]))
+                    alerted[p["code"]] = True
+                elif v["emoji"] != "🟢":
+                    alerted[p["code"]] = False               # 不再是好買點 → 重置,下次變好再通知
+                continue
+
+            # === 模式一:有設進場價 → 靠近買價就通知(附判斷)===
             d_in = (price - p["in"]) / p["in"] * 100        # 離進場價%(+貴 −便宜)
             near = abs(d_in) <= NEAR_PCT                     # 離進場價 ±NEAR% 以內才算「靠近」
             below_tgt = (p["tgt"] is None) or (price < p["tgt"])
