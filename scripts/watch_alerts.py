@@ -100,15 +100,18 @@ def fill_names(plan: list[dict]) -> None:
 
 
 def get_price(c: FugleClient, code: str):
+    last_err = ""
     for _ in range(3):                 # 限流/暫時失敗 → 重試最多 3 次
         try:
             q = c.quote(code) or {}
             p = (_f(q.get("lastPrice")) or _f(q.get("closePrice")) or _f(q.get("price")))
             if p is not None:
                 return p
-        except Exception:
-            pass
+            last_err = f"回應無價格(keys={list(q)[:8]})"
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
         time.sleep(0.5)
+    print(f"⚠️ {code} 抓不到價:{last_err}", flush=True)   # Actions log 會看到真正原因
     return None
 
 
