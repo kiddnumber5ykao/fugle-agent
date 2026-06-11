@@ -70,8 +70,32 @@ def load_plan() -> list[dict]:
         if str(r.get("啟用") or "").strip() not in ("1", "✓", "v", "V", "是", "true", "True"):
             continue
         # 進場價可留空 = 「不設價,技術面變好買點就通知」模式
-        plan.append({"code": code, "in": _f(r.get("進場價")), "tgt": _f(r.get("目標價"))})
+        plan.append({"code": code, "name": str(r.get("名稱") or r.get("name") or "").strip(),
+                     "in": _f(r.get("進場價")), "tgt": _f(r.get("目標價"))})
     return plan
+
+
+def fill_names(plan: list[dict]) -> None:
+    """名稱欄空的,自動查官方中文名,回填進「照哥計劃表」(代號為 key)。"""
+    to_write = []
+    for p in plan:
+        if p.get("name"):
+            continue
+        try:
+            from fugle_agent import free_fetch
+            nm = (free_fetch.get_name(p["code"]) or "").strip()
+        except Exception:
+            nm = ""
+        if nm:
+            p["name"] = nm
+            to_write.append({"代號": p["code"], "名稱": nm})
+    if to_write:
+        try:
+            from fugle_agent import sheets_writer
+            sheets_writer.bulk_upsert(PLAN_TAB, to_write, key="代號")
+            print(f"✍️ 回填名稱 {len(to_write)} 檔到「{PLAN_TAB}」", flush=True)
+        except Exception as e:
+            print(f"⚠️ 回填名稱失敗: {type(e).__name__}: {e}", flush=True)
 
 
 def get_price(c: FugleClient, code: str):
@@ -82,8 +106,12 @@ def get_price(c: FugleClient, code: str):
         return None
 
 
-def _line(code, price, p_in, p_tgt) -> str:
-    s = f"{code} 現價 {price:g}"
+def _tag(p) -> str:
+    return f"{p['code']} {p.get('name', '')}".strip()
+
+
+def _line(tag, price, p_in, p_tgt) -> str:
+    s = f"{tag} 現價 {price:g}"
     if p_in:
         s += f"　進場 {p_in:g}（{(price - p_in) / p_in * 100:+.1f}%）"
     if p_tgt:
@@ -96,6 +124,7 @@ def main() -> None:
     if not plan:
         tg_send(f"📡 盯盤啟動,但「{PLAN_TAB}」沒有啟用(=1)的股票,請檢查分頁。")
         return
+    fill_names(plan)            # 名稱空的 → 自動查官方中文名、回填進分頁
     c = FugleClient()
 
     # 啟動快照:每檔現價 + 距離(確認 Telegram + 讀到計劃 + 抓得到價)
@@ -103,9 +132,9 @@ def main() -> None:
     for p in plan:
         price = get_price(c, p["code"])
         if price is None:
-            snap.append(f"・{p['code']} 現價抓不到")
+            snap.append(f"・{_tag(p)} 現價抓不到")
             continue
-        line = "・" + _line(p["code"], price, p["in"], p["tgt"])
+        line = "・" + _line(_tag(p), price, p["in"], p["tgt"])
         try:
             candles = c.intraday_candles(p["code"]) or {}
             ticks = c.intraday_ticks(p["code"], limit=2000) or {}
@@ -138,8 +167,8 @@ def main() -> None:
                     print(f"⚠️ 判斷算不出 {p['code']}: {type(e).__name__}", flush=True)
                     continue
                 if v["emoji"] == "🟢" and not alerted.get(p["code"]):
-                    tg_send("\n".join([f"🟢 {p['code']} 看起來是好買點了!",
-                                       _line(p["code"], price, p["in"], p["tgt"]),
+                    tg_send("\n".join([f"🟢 {_tag(p)} 看起來是好買點了!",
+                                       _line(_tag(p), price, p["in"], p["tgt"]),
                                        f"（{'、'.join(v['reasons'][:4])}）", "你決定。"]))
                     alerted[p["code"]] = True
                 elif v["emoji"] != "🟢":
@@ -153,7 +182,7 @@ def main() -> None:
             in_zone = near and below_tgt
             if in_zone and not alerted.get(p["code"]):
                 head = "已到/更便宜了" if d_in <= 0 else "快到買價"
-                msg = [f"🔔 {p['code']} {head}", _line(p["code"], price, p["in"], p["tgt"])]
+                msg = [f"🔔 {_tag(p)} {head}", _line(_tag(p), price, p["in"], p["tgt"])]
                 # 算「現在該不該出手」白話判斷(只在要通知時才抓分鐘K+逐筆)
                 try:
                     candles = c.intraday_candles(p["code"]) or {}
