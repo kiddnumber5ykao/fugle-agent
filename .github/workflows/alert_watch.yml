@@ -24,6 +24,7 @@ jobs:
         env:
           FUGLE_MARKETDATA_API_KEY: ${{ secrets.FUGLE_MARKETDATA_API_KEY }}
           PORTFOLIO_SHEET_URL:      ${{ secrets.PORTFOLIO_SHEET_URL }}
+          SHEETS_WRITER_URL:        ${{ secrets.SHEETS_WRITER_URL }}
           TELEGRAM_BOT_TOKEN:       ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID:         ${{ secrets.TELEGRAM_CHAT_ID }}
           FUGLE_MOCK: "0"
