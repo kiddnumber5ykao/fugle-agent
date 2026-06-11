@@ -30,6 +30,7 @@ PLAN_TAB = os.getenv("PLAN_TAB", "照哥計劃表")
 NEAR_PCT = float(os.getenv("NEAR_PCT", "2"))
 POLL_SEC = int(os.getenv("POLL_SEC", "60"))
 MAX_MIN = int(os.getenv("MAX_MIN", "270"))
+STOCK_GAP = float(os.getenv("STOCK_GAP", "0.6"))   # 每檔之間間隔(秒),避免 Fugle 被一次打太多限流
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
@@ -99,11 +100,16 @@ def fill_names(plan: list[dict]) -> None:
 
 
 def get_price(c: FugleClient, code: str):
-    try:
-        q = c.quote(code) or {}
-        return (_f(q.get("lastPrice")) or _f(q.get("closePrice")) or _f(q.get("price")))
-    except Exception:
-        return None
+    for _ in range(3):                 # 限流/暫時失敗 → 重試最多 3 次
+        try:
+            q = c.quote(code) or {}
+            p = (_f(q.get("lastPrice")) or _f(q.get("closePrice")) or _f(q.get("price")))
+            if p is not None:
+                return p
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return None
 
 
 def _tag(p) -> str:
@@ -131,6 +137,7 @@ def main() -> None:
     snap = [f"📡 盯盤啟動,盯 {len(plan)} 檔(每 {POLL_SEC}s,靠近 {NEAR_PCT}% 才提醒):"]
     for p in plan:
         price = get_price(c, p["code"])
+        time.sleep(STOCK_GAP)
         if price is None:
             snap.append(f"・{_tag(p)} 現價抓不到")
             continue
@@ -152,8 +159,12 @@ def main() -> None:
         if now.weekday() >= 5 or (now.hour, now.minute) >= (13, 35):
             print("收盤/非交易時段,結束盯盤", flush=True)
             break
+        cycle_start = time.time()
+        plan = load_plan()          # 每輪重讀計劃表 → 改 Sheet 約 1 分鐘內自動生效,不用重啟
+        fill_names(plan)
         for p in plan:
             price = get_price(c, p["code"])
+            time.sleep(STOCK_GAP)
             if price is None:
                 continue
 
@@ -196,7 +207,10 @@ def main() -> None:
                 alerted[p["code"]] = True
             elif not near:
                 alerted[p["code"]] = False                  # 離開靠近區 → 重置,下次再靠近會再提醒
-        time.sleep(POLL_SEC)
+        # 整輪固定約 POLL_SEC 一圈(跑得快就補睡、跑滿就不睡)→ 檔數多也不會越拖越久
+        rest = POLL_SEC - (time.time() - cycle_start)
+        if rest > 0:
+            time.sleep(rest)
     print("watcher 結束", flush=True)
 
 
