@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 🚀【最新待上傳 2026-06-09 · DEPLOY-0609】watch_alerts.py — 盯盤即時提醒(第一版)
+# 🚀【最新待上傳 2026-06-12 · DEPLOY-0612】watch_alerts.py — 盯盤即時提醒(加全域節流防 429)
 """讀「照哥計劃表」(代號/進場價/目標價/啟用),盤中每 POLL_SEC 秒比現價:
 靠近進場價(±NEAR_PCT%、且還沒漲過目標)就推一則 Telegram,告訴你「離進場價%、離目標剩餘空間%」,
 你自己決定要不要進。不下命令、不洗版(進靠近區推一次,離開再進來才會再推)。
@@ -30,7 +30,7 @@ PLAN_TAB = os.getenv("PLAN_TAB", "照哥計劃表")
 NEAR_PCT = float(os.getenv("NEAR_PCT", "2"))
 POLL_SEC = int(os.getenv("POLL_SEC", "60"))
 MAX_MIN = int(os.getenv("MAX_MIN", "270"))
-STOCK_GAP = float(os.getenv("STOCK_GAP", "0.6"))   # 每檔之間間隔(秒),避免 Fugle 被一次打太多限流
+STOCK_GAP = float(os.getenv("STOCK_GAP", "0"))     # 每檔額外間隔(秒);節流已由 CALL_INTERVAL 接管,預設 0
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
@@ -99,10 +99,31 @@ def fill_names(plan: list[dict]) -> None:
             print(f"⚠️ 回填名稱失敗: {type(e).__name__}: {e}", flush=True)
 
 
+CALL_INTERVAL = float(os.getenv("CALL_INTERVAL", "1.1"))   # 每個 Fugle 呼叫至少間隔(秒),壓在限流以下;額度高可調小
+_last_call = [0.0]
+
+
+def _throttle() -> None:
+    wait = CALL_INTERVAL - (time.time() - _last_call[0])
+    if wait > 0:
+        time.sleep(wait)
+    _last_call[0] = time.time()
+
+
+def _verdict(c: FugleClient, code: str, price: float):
+    """算白話判斷(抓分鐘K+逐筆,每個呼叫都節流)。"""
+    _throttle()
+    candles = c.intraday_candles(code) or {}
+    _throttle()
+    ticks = c.intraday_ticks(code, limit=2000) or {}
+    return pro_signals.entry_verdict(price, candles, ticks)
+
+
 def get_price(c: FugleClient, code: str):
     last_err = ""
     for _ in range(3):                 # 限流/暫時失敗 → 重試最多 3 次
         try:
+            _throttle()
             q = c.quote(code) or {}
             p = (_f(q.get("lastPrice")) or _f(q.get("closePrice")) or _f(q.get("price")))
             if p is not None:
@@ -146,9 +167,7 @@ def main() -> None:
             continue
         line = "・" + _line(_tag(p), price, p["in"], p["tgt"])
         try:
-            candles = c.intraday_candles(p["code"]) or {}
-            ticks = c.intraday_ticks(p["code"], limit=2000) or {}
-            v = pro_signals.entry_verdict(price, candles, ticks)
+            v = _verdict(c, p["code"], price)
             line += f"\n　{v['emoji']} {v['headline']}"
         except Exception:
             pass
@@ -174,9 +193,7 @@ def main() -> None:
             # === 模式二:沒設進場價 → 不管價位,技術面變「好買點(🟢)」就通知 ===
             if p["in"] is None:
                 try:
-                    candles = c.intraday_candles(p["code"]) or {}
-                    ticks = c.intraday_ticks(p["code"], limit=2000) or {}
-                    v = pro_signals.entry_verdict(price, candles, ticks)
+                    v = _verdict(c, p["code"], price)
                 except Exception as e:
                     print(f"⚠️ 判斷算不出 {p['code']}: {type(e).__name__}", flush=True)
                     continue
@@ -199,9 +216,7 @@ def main() -> None:
                 msg = [f"🔔 {_tag(p)} {head}", _line(_tag(p), price, p["in"], p["tgt"])]
                 # 算「現在該不該出手」白話判斷(只在要通知時才抓分鐘K+逐筆)
                 try:
-                    candles = c.intraday_candles(p["code"]) or {}
-                    ticks = c.intraday_ticks(p["code"], limit=2000) or {}
-                    v = pro_signals.entry_verdict(price, candles, ticks)
+                    v = _verdict(c, p["code"], price)
                     msg.append(f"{v['emoji']} {v['headline']}（{'、'.join(v['reasons'][:4])}）")
                 except Exception as e:
                     print(f"⚠️ 判斷算不出 {p['code']}: {type(e).__name__}", flush=True)
