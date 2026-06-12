@@ -176,17 +176,22 @@ def main() -> None:
 
     alerted: dict[str, bool] = {}
     t0 = time.time()
+    cyc = 0
     while (time.time() - t0) < MAX_MIN * 60:
         now = _tw_now()
         if now.weekday() >= 5 or (now.hour, now.minute) >= (13, 35):
             print("收盤/非交易時段,結束盯盤", flush=True)
             break
         cycle_start = time.time()
+        cyc += 1
         plan = load_plan()          # 每輪重讀計劃表 → 改 Sheet 約 1 分鐘內自動生效,不用重啟
         fill_names(plan)
+        got = 0
         for p in plan:
             price = get_price(c, p["code"])
             time.sleep(STOCK_GAP)
+            if price is not None:
+                got += 1
             if price is None:
                 continue
 
@@ -225,6 +230,8 @@ def main() -> None:
                 alerted[p["code"]] = True
             elif not near:
                 alerted[p["code"]] = False                  # 離開靠近區 → 重置,下次再靠近會再提醒
+        # 心跳:每輪印一行 → 打開 Actions log 看得到它一直在跑(不靠 Telegram 也能確認還活著)
+        print(f"🫀 第{cyc}輪 巡完{got}/{len(plan)}檔 {_tw_now():%H:%M:%S}（耗時{time.time()-cycle_start:.0f}s）", flush=True)
         # 整輪固定約 POLL_SEC 一圈(跑得快就補睡、跑滿就不睡)→ 檔數多也不會越拖越久
         rest = POLL_SEC - (time.time() - cycle_start)
         if rest > 0:
