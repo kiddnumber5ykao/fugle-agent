@@ -1,4 +1,4 @@
-# 🚀【最新待上傳 2026-06-09 14:27 · DEPLOY-0609】free_fetch.py — 上櫃月營收改用櫃買 OpenAPI(mopsfin_t187ap05_O,已驗證)+ 官方產業別
+# 🚀【最新 2026-06-12 · DEPLOY-0612】free_fetch.py — 免費資料源(公司名/月營收/產業別)
 """免費官方資料抓取 — 估值 / 月營收 / 新聞,給 _fetch_fundamentals 用。
 
 目的:把最貴的 Anthropic `web_search` 拿掉。改成:

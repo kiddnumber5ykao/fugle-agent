@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 18:30  欄位白話改名:讀取時新欄名→舊key對照
+# 🚀【最新 2026-06-12 · DEPLOY-0612】sheets.py — 讀 Google Sheet 各分頁(fetch_tab)
 """Google Sheets reader — pulls public sheet tabs as CSV.
 
 No OAuth or service account needed; relies on the sheet being shared as

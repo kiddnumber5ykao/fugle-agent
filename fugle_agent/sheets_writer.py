@@ -1,4 +1,4 @@
-# 📅 ★最新版★ 上傳於 2026-06-02 20:40  加 bulk_upsert(批次寫入,最快)
+# 🚀【最新 2026-06-12 · DEPLOY-0612】sheets_writer.py — 寫回 Sheet(bulk_upsert,經 Apps Script)
 """POST helper for the Apps Script Web App that writes to the user's
 '加油好嗎' Google Sheet.
 

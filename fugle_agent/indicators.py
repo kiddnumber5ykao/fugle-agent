@@ -1,3 +1,4 @@
+# 🚀【最新 2026-06-12 · DEPLOY-0612】indicators.py — 純Python技術指標(ema/rsi)
 """Pure-python technical indicators — no numpy/pandas dependency."""
 
 from __future__ import annotations
