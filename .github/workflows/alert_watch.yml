@@ -1,15 +1,18 @@
-# 🚀【最新待上傳 2026-06-09 · DEPLOY-0609】alert_watch.yml — 盯盤即時提醒(盤中長工作)
+# 🚀【最新待上傳 2026-06-12 · DEPLOY-0612】alert_watch.yml — 盯盤即時提醒(盤中長工作,排程錯峰重試)
 name: 盯盤提醒 (盤中)
 run-name: 盯盤提醒
 
 on:
   workflow_dispatch:        # 保留手動(當備援)
-  schedule:                 # 台北 09:03 = UTC 01:03 啟動,週一~五;跑到收盤
-    - cron: '3 1 * * 1-5'
+  schedule:                 # GitHub 排程不保證準時,放多個錯峰時間輪流卡位(台北 = UTC+8)
+    - cron: '1 1 * * 1-5'   # 09:01
+    - cron: '11 1 * * 1-5'  # 09:11(後援)
+    - cron: '21 1 * * 1-5'  # 09:21(後援)
+    - cron: '41 1 * * 1-5'  # 09:41(後援)
 
 concurrency:
   group: alert-watch
-  cancel-in-progress: true
+  cancel-in-progress: false   # 已在跑就讓它跑完;後援觸發會排隊→收盤後自己 no-op,不會砍掉正在盯的
 
 jobs:
   watch:
