@@ -1,4 +1,4 @@
-# 🚀【最新 2026-06-12 · DEPLOY-0612】portfolio.py — 極簡持股 + 已實現損益(盤中即時股價)
+# 🚀【最新上傳 2026-06-13 21:20】portfolio.py — 極簡持股 + 已實現損益(盤中即時股價 + 大盤/美股橫幅)
 """只讀 Google Sheet 的「股票交易」頁 → 用平均成本法算持股 → Fugle 即時報價 → 損益。
 另讀「實際損益」頁顯示已實現。兩個分頁,表格可點欄位排序;盤中每 30 秒自動更新。
 
@@ -23,13 +23,15 @@ for _k in ("FUGLE_MARKETDATA_API_KEY", "FUGLE_API_KEY", "PORTFOLIO_SHEET_URL"):
     if _k in st.secrets and not os.environ.get(_k):
         os.environ[_k] = str(st.secrets[_k])
 
+import math  # noqa: E402
+
 from fugle_agent.client import FugleClient  # noqa: E402
 
 SHEET_FALLBACK = "12xw3HLOq7e7vAogjwbnUwR77ApBfqQQkwMxDuHEKYAo"
 DISCOUNT = 0.88          # 賣出手續費折扣(對齊券商 App)
 FEE_RATE = 0.001425
 
-st.set_page_config(page_title="我的投資", layout="wide")
+st.set_page_config(page_title="加油好嗎?", layout="wide")
 
 
 def _num(x) -> float:
@@ -114,12 +116,82 @@ def _color(v):
     return ""
 
 
+def _bg(light: str) -> tuple[str, str]:
+    if "🔴" in light:
+        return "rgba(226,75,74,.10)", "rgba(226,75,74,.40)"
+    if "🟢" in light:
+        return "rgba(99,153,34,.10)", "rgba(99,153,34,.40)"
+    return "rgba(127,127,127,.07)", "rgba(127,127,127,.25)"
+
+
+@st.cache_data(ttl=60)
+def taiwan_banner() -> tuple[str, str]:
+    try:
+        from fugle_agent import market_context
+        m = market_context.get_market_context()
+        return m.get("light", ""), m.get("reason", "")
+    except Exception:
+        return "", ""
+
+
+@st.cache_data(ttl=120)
+def us_banner() -> dict:
+    out = {"items": {}, "time": "", "light": "🟡 普通"}
+    try:
+        from fugle_agent import us_market
+        asof = ""
+        for zh, sym in (("費半", "^SOX"), ("標普", "^GSPC"), ("那斯達克", "^IXIC")):
+            q = us_market.quote(sym)
+            cp = q.get("changePercent") if isinstance(q, dict) and not q.get("error") else None
+            if cp is not None and not (isinstance(cp, float) and math.isnan(cp)):
+                out["items"][zh] = float(cp)
+                if not asof and q.get("asOf"):
+                    asof = str(q["asOf"])[:10]
+        if out["items"]:
+            out["time"] = us_market.latest_index_time() or asof
+            avg = sum(out["items"].values()) / len(out["items"])
+            out["light"] = "🟢 偏強" if avg >= 0.5 else ("🔴 偏弱" if avg <= -0.5 else "🟡 普通")
+    except Exception:
+        pass
+    return out
+
+
+def render_banners() -> None:
+    box = ("<div style='background:{bg};border:.5px solid {bd};border-radius:10px;"
+           "padding:8px 12px;margin-bottom:8px;font-size:13px'>{html}</div>")
+    tl, treason = taiwan_banner()
+    if tl:
+        bg, bd = _bg(tl)
+        st.markdown(box.format(bg=bg, bd=bd, html=f"🌡️ <b>大盤:{tl}</b>　{treason}"),
+                    unsafe_allow_html=True)
+    us = us_banner()
+    if us["items"]:
+        bg, bd = _bg(us["light"])
+        parts = []
+        for zh, pct in us["items"].items():
+            col = "#e23b3b" if pct >= 0 else "#1f9d6b"
+            parts.append(f'{zh} <span style="color:{col};font-weight:500">{pct:+.1f}%</span>')
+        when = us.get("time") or ""
+        dtag = f"(資料 {when}・延遲約15分)" if when else "(延遲約15分)"
+        st.markdown(box.format(bg=bg, bd=bd,
+                    html=f"🌎 <b>美股:{us['light']}</b>　" + " · ".join(parts) + f"　{dtag}"),
+                    unsafe_allow_html=True)
+
+
 # ---------------------------------------------------------------- 版面
-st.title("我的投資")
+st.title("加油好嗎?")
 st.caption(("🟢 盤中・每 30 秒自動更新即時股價" if market_open()
             else "⚪ 非盤中・顯示最後成交價") + f"　|　{datetime.utcnow() + timedelta(hours=8):%Y-%m-%d %H:%M:%S}")
 if st.button("🔄 立即重抓"):
-    live_prices.clear(); fetch_tab.clear(); st.rerun()
+    live_prices.clear(); fetch_tab.clear(); taiwan_banner.clear(); us_banner.clear(); st.rerun()
+
+
+@st.fragment(run_every=(60 if market_open() else None))
+def banners_view():
+    render_banners()
+
+
+banners_view()
 
 tab_h, tab_r = st.tabs(["持股總覽", "已實現損益"])
 

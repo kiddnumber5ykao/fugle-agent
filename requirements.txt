@@ -1,3 +1,4 @@
+# 🚀【最新上傳 2026-06-13 21:20】requirements.txt — 加 pandas(portfolio.py 用)
 anthropic>=0.40.0
 fugle-marketdata>=2.3.0
 pandas>=2.0.0
